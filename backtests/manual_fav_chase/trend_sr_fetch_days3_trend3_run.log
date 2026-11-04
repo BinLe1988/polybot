@@ -1,0 +1,27 @@
+[filters] trend_n=3 enabled=True sr1000=True (--trend6 is alias; lookback is 3)
+[range] inclusive SH days 2026-10-31→2026-11-02 epochs=[1793376000,1793635200) = 2026-10-31 00:00:00 Asia/Shanghai → 2026-11-03 00:00:00 Asia/Shanghai
+[klines] fetching Binance 5m 2026-10-30 23:35:00 Asia/Shanghai → 2026-11-03 00:00:00 Asia/Shanghai
+[klines] n_bars=871
+[fetch] --trend-windows-only: 864 → 197 (up=103 down=94 active_pct=22.80%)
+[fetch] windows=197 range=2026-10-31 00:00:00 Asia/Shanghai → 2026-11-03 00:00:00 Asia/Shanghai trend3_prevalence up=103 down=94 other=667 pct=22.80%
+[fetch] parallel workers=12
+  … scanned 40/197 ok=40
+  … scanned 80/197 ok=80
+  … scanned 120/197 ok=117
+  … scanned 160/197 ok=157
+Wrote /Users/nick/poly-test/backtests/manual_fav_chase/trend_sr_fetch_summary_20261031_20261102.json
+Wrote /Users/nick/poly-test/backtests/manual_fav_chase/trend_sr_fetch_trades_20261031_20261102.csv
+
+======== fav_chase trend+SR (fetch_B_mid_sim) ========
+range: 2026-10-31 00:00:00 Asia/Shanghai → 2026-11-03 00:00:00 Asia/Shanghai
+filters: trend6=True sr1000=True klines=871
+R1 BASELINE: n=166 WR=0.8373 pnl=$44.6925
+R1 FILTERED: n=88 WR=0.8409 pnl=$24.284
+R1 baseline_triggers=166 would_block_trend6=79 would_block_sr_false=1
+R2 BASELINE: n=152 WR=0.8816 pnl=$28.8331
+R2 FILTERED: n=78 WR=0.8974 pnl=$9.1943
+R2 baseline_triggers=152 would_block_trend6=72 would_block_sr_false=2
+trend3 def: Relative to current 5m market window start ws: take Binance BTCUSDT 5m closes for bar opens [ws-1200, ws-900, ws-600, ws-300] (4 closes). Co ...
+sr1000 def: Round levels every 1000 USD. Probe last 4 completed 5m bars. Near-level band ±150.0. Pierce beyond level by ≥20.0. FALSE ...
+================================================
+

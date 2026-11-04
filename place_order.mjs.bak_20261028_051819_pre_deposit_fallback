@@ -1,0 +1,416 @@
+#!/usr/bin/env node
+/**
+ * Limited live order helper.
+ * Caps every order by POLYMARKET_MAX_ORDER_USD (env file or process.env).
+ *
+ * Uses @polymarket/clob-client-v2 with EXPLICIT Poly Proxy path:
+ *   signatureType = POLYMARKET_SIGNATURE_TYPE (default 1 = POLY_PROXY)
+ *   funderAddress = POLYMARKET_FUNDER_ADDRESS || POLYMARKET_WALLET_ADDRESS
+ *
+ * CLOB production requires V2-signed orders (EIP-712 domain version "2").
+ * Legacy @polymarket/clob-client (v1) yields HTTP 400:
+ *   "invalid order version, please use the latest clob-client"
+ *
+ * createSecureClient auto-classify mislabels this account as DEPOSIT_WALLET +
+ * SESSION_KEY when the proxy is not the SDK's CREATE2-derived address — that
+ * caused "order signer address has to be the address of the API KEY".
+ *
+ * Usage:
+ *   node place_order.mjs --slug btc-updown-5m-<ts> --outcome up|down --side BUY|SELL --amount 2
+ *   node place_order.mjs --slug ... --outcome down --side BUY --amount 2 --dry
+ *   node place_order.mjs --slug ... --outcome up --side BUY --amount 2 --sign-only
+ *
+ * Exit 0 only if response.ok (or --dry / --sign-only succeeded). Prints JSON.
+ * Never prints private keys or API secrets.
+ */
+import { ClobClient, OrderType, Side, Chain } from "@polymarket/clob-client-v2";
+import { Wallet } from "@ethersproject/wallet";
+import { createPublicClient } from "@polymarket/client";
+import { loadEnv, parseArgs } from "./lib_env.mjs";
+
+const SIG_NAMES = {
+  0: "EOA",
+  1: "POLY_PROXY",
+  2: "POLY_GNOSIS_SAFE",
+  3: "POLY_1271",
+};
+
+function maskAddr(a) {
+  const s = String(a || "");
+  if (s.length < 10) return s ? "***" : "";
+  return `${s.slice(0, 6)}…${s.slice(-4)}`;
+}
+
+/** Same pattern as strategy_btc5m_cs.mjs */
+function assetIdForOutcome(market, names) {
+  const entries = Object.entries(market.outcomes || {});
+  for (const want of names) {
+    for (const [k, v] of entries) {
+      if (String(k).toLowerCase() === want.toLowerCase()) {
+        return market.version === "v2" ? v.positionId : v.tokenId;
+      }
+    }
+  }
+  for (const [, v] of entries) {
+    const n = String(v?.name || v?.label || "").toLowerCase();
+    if (names.some((w) => n === w.toLowerCase())) {
+      return market.version === "v2" ? v.positionId : v.tokenId;
+    }
+  }
+  return null;
+}
+
+function outcomeNames(outcome) {
+  const o = String(outcome || "").toLowerCase();
+  if (o === "up" || o === "yes") return ["Up", "yes", "UP", "Yes"];
+  if (o === "down" || o === "no") return ["Down", "no", "DOWN", "No"];
+  return null;
+}
+
+function resolveSignatureType(raw) {
+  if (raw == null || raw === "") return 1;
+  const s = String(raw).trim().toUpperCase();
+  if (s === "POLY_PROXY" || s === "PROXY") return 1;
+  if (s === "EOA") return 0;
+  if (s === "POLY_GNOSIS_SAFE" || s === "GNOSIS_SAFE" || s === "SAFE") return 2;
+  if (s === "POLY_1271" || s === "1271") return 3;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 1;
+}
+
+function orderAsset(market, assetId) {
+  const id = String(assetId);
+  if (market?.version === "v2") return { positionID: id };
+  return { tokenID: id };
+}
+
+function summarizeSigned(order) {
+  if (!order || typeof order !== "object") return { present: false };
+  const keys = Object.keys(order);
+  return {
+    present: true,
+    keys,
+    hasTimestamp: "timestamp" in order || "timestamp" in (order.order || {}),
+    hasMetadata: "metadata" in order || "metadata" in (order.order || {}),
+    hasBuilder: "builder" in order || "builder" in (order.order || {}),
+    hasNonce: "nonce" in order || "nonce" in (order.order || {}),
+    hasFeeRateBps: "feeRateBps" in order || "feeRateBps" in (order.order || {}),
+    signatureType: order.signatureType ?? order.order?.signatureType,
+    // never dump full signature
+    signaturePrefix: String(order.signature || order.order?.signature || "").slice(0, 10) || undefined,
+  };
+}
+
+async function buildClobClient(cfg) {
+  const host = "https://clob.polymarket.com";
+  const chain = Chain.POLYGON;
+  const signatureType = resolveSignatureType(
+    process.env.POLYMARKET_SIGNATURE_TYPE ?? cfg.signatureType
+  );
+  const funderAddress =
+    process.env.POLYMARKET_FUNDER_ADDRESS ||
+    process.env.POLYMARKET_WALLET_ADDRESS ||
+    cfg.funder ||
+    cfg.wallet;
+  const signer = new Wallet(cfg.privateKey);
+
+  // L1: derive API key with signer only
+  const creds = await new ClobClient({
+    host,
+    chain,
+    signer,
+  }).createOrDeriveApiKey();
+
+  // L2: explicit POLY_PROXY + funder (do NOT use createSecureClient auto-classify)
+  const client = new ClobClient({
+    host,
+    chain,
+    signer,
+    creds,
+    signatureType,
+    funderAddress,
+  });
+
+  // Adopt server order version before first live post
+  let orderVersion = null;
+  try {
+    orderVersion = await client.getVersion();
+  } catch (_) {
+    orderVersion = null;
+  }
+
+  const st = client.signatureType ?? client.orderBuilder?.signatureType ?? signatureType;
+  return {
+    client,
+    signer,
+    funder: funderAddress,
+    signatureType: st,
+    signatureTypeName: SIG_NAMES[st] || String(st),
+    walletType:
+      SIG_NAMES[st] === "POLY_PROXY" ? "POLY_PROXY" : SIG_NAMES[st] || "UNKNOWN",
+    signerType: "OWNER",
+    orderVersion,
+    clientPackage: "@polymarket/clob-client-v2",
+  };
+}
+
+const args = parseArgs();
+const cfg = loadEnv();
+const MAX = Number(
+  process.env.POLYMARKET_MAX_ORDER_USD || cfg.maxOrderUsd || 10
+);
+const dry =
+  args.dry === "true" || args.dry === "1" || args.help === "true" || args.help === "1";
+const signOnly = args["sign-only"] === "true" || args["sign-only"] === "1";
+
+if (args.help === "true" || args.help === "1") {
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        help: true,
+        usage:
+          "node place_order.mjs --slug btc-updown-5m-<ts> --outcome up|down --side BUY|SELL --amount <usd> [--shares N|--price P] [--dry|--sign-only]",
+        caps: { POLYMARKET_MAX_ORDER_USD: MAX },
+        flags: ["slug", "outcome", "side", "amount", "dry", "sign-only", "help"],
+        path: "clob-client-v2 explicit POLY_PROXY",
+      },
+      null,
+      2
+    )
+  );
+  process.exit(0);
+}
+
+const amount = Number(args.amount || "1");
+if (!(amount > 0) || amount > MAX) {
+  console.error(
+    JSON.stringify({
+      ok: false,
+      error: "amount_cap",
+      amount,
+      max: MAX,
+      message: `amount must be in (0, ${MAX}]`,
+    })
+  );
+  process.exit(1);
+}
+
+const sideStr = (args.side || "BUY").toUpperCase();
+const side = sideStr === "SELL" ? Side.SELL : Side.BUY;
+const outcome = (args.outcome || "").toLowerCase();
+const names = outcome ? outcomeNames(outcome) : null;
+
+if (outcome && !names) {
+  console.error(
+    JSON.stringify({
+      ok: false,
+      error: "bad_outcome",
+      outcome,
+      message: "outcome must be up|down (or yes|no)",
+    })
+  );
+  process.exit(1);
+}
+
+try {
+  const built = await buildClobClient(cfg);
+  const diag = {
+    signer: maskAddr(await built.signer.getAddress()),
+    funder: maskAddr(built.funder),
+    signatureType: built.signatureType,
+    signatureTypeName: built.signatureTypeName,
+    walletType: built.walletType,
+    signerType: built.signerType,
+    path: "clob-client-v2-explicit",
+    clientPackage: built.clientPackage,
+    orderVersion: built.orderVersion,
+  };
+
+  if (built.signatureType !== 1) {
+    console.error(
+      JSON.stringify({
+        ok: false,
+        error: "bad_signature_type",
+        message: "expected signatureType=1 (POLY_PROXY)",
+        ...diag,
+      })
+    );
+    process.exit(1);
+  }
+
+  const pub = createPublicClient();
+  let market;
+  if (args.slug) market = await pub.fetchMarket({ slug: args.slug });
+  else
+    market = (await pub.listMarkets({ closed: false, pageSize: 10 }).firstPage())
+      .items[0];
+
+  let assetId;
+  if (names) {
+    assetId = assetIdForOutcome(market, names);
+    if (!assetId) {
+      console.log(
+        JSON.stringify(
+          {
+            ok: false,
+            error: "missing_asset_id",
+            slug: market?.slug,
+            outcome,
+            outcomeKeys: Object.keys(market?.outcomes || {}),
+            ...diag,
+          },
+          null,
+          2
+        )
+      );
+      process.exit(1);
+    }
+  } else {
+    const yes = market.outcomes.yes || market.outcomes.Up || market.outcomes.up;
+    if (!yes) {
+      assetId = assetIdForOutcome(market, ["Up", "yes"]);
+    } else {
+      assetId = market.version === "v2" ? yes.positionId : yes.tokenId;
+    }
+  }
+
+  let shares = args.shares != null ? Number(args.shares) : null;
+  const priceHint = args.price != null ? Number(args.price) : null;
+  if (sideStr === "SELL") {
+    if (!(shares > 0) && priceHint > 0 && amount > 0) {
+      shares = Math.floor((amount / priceHint) * 10000) / 10000;
+    }
+    if (!(shares > 0)) {
+      console.error(
+        JSON.stringify({
+          ok: false,
+          error: "sell_needs_shares",
+          message: "SELL requires --shares N (or --amount + --price to derive)",
+          ...diag,
+        })
+      );
+      process.exit(1);
+    }
+  }
+
+  if (dry) {
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          dry: true,
+          market: market.slug,
+          marketVersion: market.version,
+          outcome: outcome || "default_yes",
+          side: sideStr,
+          amount: sideStr === "BUY" ? amount : undefined,
+          shares: sideStr === "SELL" ? shares : undefined,
+          max: MAX,
+          assetId: String(assetId).slice(0, 12) + "…",
+          outcomeKeys: Object.keys(market.outcomes || {}),
+          action: "would_place",
+          ...diag,
+        },
+        null,
+        2
+      )
+    );
+    process.exit(0);
+  }
+
+  const asset = orderAsset(market, assetId);
+  const userMarketOrder =
+    sideStr === "SELL"
+      ? { ...asset, side, amount: Number(shares), orderType: OrderType.FOK }
+      : { ...asset, side, amount: Number(amount), orderType: OrderType.FOK };
+
+  if (signOnly) {
+    const signed = await built.client.createMarketOrder(userMarketOrder);
+    const summary = summarizeSigned(signed);
+    const looksV2 =
+      summary.hasTimestamp &&
+      summary.hasMetadata &&
+      summary.hasBuilder &&
+      !summary.hasNonce &&
+      !summary.hasFeeRateBps;
+    console.log(
+      JSON.stringify(
+        {
+          ok: looksV2,
+          signOnly: true,
+          market: market.slug,
+          marketVersion: market.version,
+          outcome: outcome || "default_yes",
+          side: sideStr,
+          amount: sideStr === "BUY" ? amount : undefined,
+          shares: sideStr === "SELL" ? shares : undefined,
+          signedOrder: summary,
+          looksV2,
+          ...diag,
+        },
+        null,
+        2
+      )
+    );
+    process.exit(looksV2 ? 0 : 1);
+  }
+
+  const response = await built.client.createAndPostMarketOrder(
+    userMarketOrder,
+    undefined,
+    OrderType.FOK
+  );
+
+  const errText = String(
+    response?.error || response?.errorMsg || response?.message || ""
+  ).toLowerCase();
+  const versionReject =
+    errText.includes("invalid order version") ||
+    errText.includes("order version");
+
+  const ok =
+    response &&
+    !versionReject &&
+    (response.success === true ||
+      response.status === "matched" ||
+      response.orderID ||
+      response.orderId ||
+      response.id);
+
+  console.log(
+    JSON.stringify(
+      {
+        ok: Boolean(ok),
+        market: market.slug,
+        outcome: outcome || "default_yes",
+        side: sideStr,
+        amount: sideStr === "BUY" ? amount : undefined,
+        shares: sideStr === "SELL" ? shares : undefined,
+        signatureType: diag.signatureType,
+        signatureTypeName: diag.signatureTypeName,
+        walletType: diag.walletType,
+        funder: diag.funder,
+        signer: diag.signer,
+        path: diag.path,
+        clientPackage: diag.clientPackage,
+        orderVersion: diag.orderVersion,
+        versionReject,
+        response,
+      },
+      null,
+      2
+    )
+  );
+  if (!ok) process.exit(1);
+} catch (e) {
+  const msg = String(e?.message || e);
+  console.error(
+    JSON.stringify({
+      ok: false,
+      error: msg,
+      versionReject: /invalid order version/i.test(msg),
+    })
+  );
+  process.exit(1);
+}

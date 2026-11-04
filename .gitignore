@@ -1,0 +1,19 @@
+# Secrets — never commit
+.env
+.env.*
+*.key
+*.pem
+
+# Dependencies & caches
+node_modules/
+__pycache__/
+*.pyc
+
+# Runtime state & logs (code snapshots only; live data stays on the Mac)
+logs/*.log
+logs/*.out
+logs/*.pid
+logs/*day_state*.json
+logs/*open_positions*.json
+nohup.out
+*.pid

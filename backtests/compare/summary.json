@@ -1,0 +1,287 @@
+{
+  "generated_at_asia_shanghai": "2026-10-20T10:54:40.940690+08:00",
+  "paper_only": true,
+  "one_line_winner": "赢家（公平 ask 口径）：polybot 家族略胜 — `polybot_cs_edge0.001_ask_conservative` 净 PnL $8.42 vs CloddsBot 最优 `clodds_updown_arb_edge0.01` $8.37（差额仅 $0.05，实质接近平手）。方向性 CloddsBot（动量/均值回归）大幅亏损。勿把 `bid_approx`+$41 当实盘预期（假设 maker 零费率且能挂到 bid）。纸面≠实盘；5m≠polybot 原生 15m。",
+  "max_notional_usd": 10.0,
+  "fee_model": "taker fee = shares * 0.07 * p * (1-p)",
+  "sample": {
+    "n_markets": 200,
+    "n_with_series": 200,
+    "window_ts_min": 1792404300,
+    "window_ts_max": 1792464000,
+    "range_asia_shanghai": [
+      "2026-10-19 18:05:00 Asia/Shanghai",
+      "2026-10-20 10:40:00 Asia/Shanghai"
+    ],
+    "up_wins": 95,
+    "down_wins": 105
+  },
+  "strategies": {
+    "polybot_cs_edge0.001_mid_optimistic": {
+      "strategy": "polybot_cs_edge0.001_mid_optimistic",
+      "family": "polybot",
+      "trades": 124,
+      "markets_traded": 124,
+      "wins": null,
+      "win_rate": null,
+      "net_pnl": 6.3847293274444885,
+      "gross_pnl": 41.62636208406634,
+      "total_fees": 35.241632756621854,
+      "max_drawdown": 1.3576376004947477,
+      "avg_edge_gross": 0.03133870967741937,
+      "avg_pnl_net": 0.05148975264068136,
+      "total_notional": 1240.0,
+      "n_markets": 200,
+      "skip_reasons": {
+        "no_series": 0,
+        "no_edge_in_window": 76,
+        "entered": 124
+      }
+    },
+    "polybot_cs_edge0.001_bid_approx": {
+      "strategy": "polybot_cs_edge0.001_bid_approx",
+      "family": "polybot",
+      "trades": 197,
+      "markets_traded": 197,
+      "wins": null,
+      "win_rate": null,
+      "net_pnl": 41.452578618499906,
+      "gross_pnl": 41.452578618499906,
+      "total_fees": 0.0,
+      "max_drawdown": 0.0,
+      "avg_edge_gross": 0.02000000000000001,
+      "avg_pnl_net": 0.21041918080456806,
+      "total_notional": 1970.0,
+      "n_markets": 200,
+      "skip_reasons": {
+        "no_series": 0,
+        "no_edge_in_window": 3,
+        "entered": 197
+      }
+    },
+    "polybot_cs_edge0.001_ask_conservative": {
+      "strategy": "polybot_cs_edge0.001_ask_conservative",
+      "family": "polybot",
+      "trades": 102,
+      "markets_traded": 102,
+      "wins": null,
+      "win_rate": null,
+      "net_pnl": 8.424076664197443,
+      "gross_pnl": 32.307675778545324,
+      "total_fees": 23.88359911434788,
+      "max_drawdown": 0.8242218236617037,
+      "avg_edge_gross": 0.02958333333333335,
+      "avg_pnl_net": 0.0825889869038965,
+      "total_notional": 1020.0,
+      "n_markets": 200,
+      "skip_reasons": {
+        "no_series": 0,
+        "no_edge_in_window": 98,
+        "entered": 102
+      }
+    },
+    "polybot_cs_edge0.01_mid_optimistic": {
+      "strategy": "polybot_cs_edge0.01_mid_optimistic",
+      "family": "polybot",
+      "trades": 122,
+      "markets_traded": 122,
+      "wins": null,
+      "win_rate": null,
+      "net_pnl": 6.591280442630025,
+      "gross_pnl": 41.566100817774924,
+      "total_fees": 34.9748203751449,
+      "max_drawdown": 1.3576376004947477,
+      "avg_edge_gross": 0.0318032786885246,
+      "avg_pnl_net": 0.054026888874016604,
+      "total_notional": 1220.0,
+      "n_markets": 200,
+      "skip_reasons": {
+        "no_series": 0,
+        "no_edge_in_window": 78,
+        "entered": 122
+      }
+    },
+    "polybot_cs_edge0.01_bid_approx": {
+      "strategy": "polybot_cs_edge0.01_bid_approx",
+      "family": "polybot",
+      "trades": 197,
+      "markets_traded": 197,
+      "wins": null,
+      "win_rate": null,
+      "net_pnl": 41.452578618499906,
+      "gross_pnl": 41.452578618499906,
+      "total_fees": 0.0,
+      "max_drawdown": 0.0,
+      "avg_edge_gross": 0.02000000000000001,
+      "avg_pnl_net": 0.21041918080456806,
+      "total_notional": 1970.0,
+      "n_markets": 200,
+      "skip_reasons": {
+        "no_series": 0,
+        "no_edge_in_window": 3,
+        "entered": 197
+      }
+    },
+    "polybot_cs_edge0.01_ask_conservative": {
+      "strategy": "polybot_cs_edge0.01_ask_conservative",
+      "family": "polybot",
+      "trades": 81,
+      "markets_traded": 81,
+      "wins": null,
+      "win_rate": null,
+      "net_pnl": 8.366077113480232,
+      "gross_pnl": 31.37848925553689,
+      "total_fees": 23.01241214205666,
+      "max_drawdown": 0.7123939393939409,
+      "avg_edge_gross": 0.03611111111111112,
+      "avg_pnl_net": 0.10328490263555842,
+      "total_notional": 810.0,
+      "n_markets": 200,
+      "skip_reasons": {
+        "no_series": 0,
+        "no_edge_in_window": 119,
+        "entered": 81
+      }
+    },
+    "clodds_mean_reversion": {
+      "strategy": "clodds_mean_reversion",
+      "family": "cloddsbot",
+      "trades": 9,
+      "markets_traded": 9,
+      "wins": 1,
+      "win_rate": 0.1111111111111111,
+      "net_pnl": -65.91564100738931,
+      "gross_pnl": -59.09505253288093,
+      "total_fees": 6.82058847450838,
+      "max_drawdown": 65.9156410073893,
+      "avg_edge_gross": 0.2276241273155046,
+      "avg_pnl_net": -7.323960111932146,
+      "total_notional": 84.74658352877782,
+      "n_markets": 200,
+      "skip_reasons": {
+        "warmup": 19,
+        "no_signal": 0,
+        "entered": 9,
+        "std_zero": 0
+      }
+    },
+    "clodds_momentum": {
+      "strategy": "clodds_momentum",
+      "family": "cloddsbot",
+      "trades": 143,
+      "markets_traded": 143,
+      "wins": 78,
+      "win_rate": 0.5454545454545454,
+      "net_pnl": -105.45306513054956,
+      "gross_pnl": -42.48826080054387,
+      "total_fees": 62.964804330005705,
+      "max_drawdown": 134.16612842570316,
+      "avg_edge_gross": 0.3473740565574279,
+      "avg_pnl_net": -0.737434021891955,
+      "total_notional": 1390.7821214810722,
+      "n_markets": 200,
+      "skip_reasons": {
+        "warmup": 19,
+        "no_signal": 0,
+        "entered": 143
+      }
+    },
+    "clodds_updown_arb_edge0.01": {
+      "strategy": "clodds_updown_arb_edge0.01",
+      "family": "cloddsbot",
+      "trades": 81,
+      "markets_traded": 81,
+      "wins": null,
+      "win_rate": null,
+      "net_pnl": 8.366077113480232,
+      "gross_pnl": 31.37848925553689,
+      "total_fees": 23.01241214205666,
+      "max_drawdown": 0.7123939393939409,
+      "avg_edge_gross": 0.03611111111111112,
+      "avg_pnl_net": 0.10328490263555842,
+      "total_notional": 810.0,
+      "n_markets": 200,
+      "skip_reasons": {
+        "no_series": 0,
+        "no_edge": 119,
+        "entered": 81
+      }
+    }
+  },
+  "family_best": {
+    "polybot_any": {
+      "strategy": "polybot_cs_edge0.001_bid_approx",
+      "family": "polybot",
+      "trades": 197,
+      "markets_traded": 197,
+      "wins": null,
+      "win_rate": null,
+      "net_pnl": 41.452578618499906,
+      "gross_pnl": 41.452578618499906,
+      "total_fees": 0.0,
+      "max_drawdown": 0.0,
+      "avg_edge_gross": 0.02000000000000001,
+      "avg_pnl_net": 0.21041918080456806,
+      "total_notional": 1970.0,
+      "n_markets": 200,
+      "skip_reasons": {
+        "no_series": 0,
+        "no_edge_in_window": 3,
+        "entered": 197
+      }
+    },
+    "polybot_ask_conservative": {
+      "strategy": "polybot_cs_edge0.001_ask_conservative",
+      "family": "polybot",
+      "trades": 102,
+      "markets_traded": 102,
+      "wins": null,
+      "win_rate": null,
+      "net_pnl": 8.424076664197443,
+      "gross_pnl": 32.307675778545324,
+      "total_fees": 23.88359911434788,
+      "max_drawdown": 0.8242218236617037,
+      "avg_edge_gross": 0.02958333333333335,
+      "avg_pnl_net": 0.0825889869038965,
+      "total_notional": 1020.0,
+      "n_markets": 200,
+      "skip_reasons": {
+        "no_series": 0,
+        "no_edge_in_window": 98,
+        "entered": 102
+      }
+    },
+    "cloddsbot": {
+      "strategy": "clodds_updown_arb_edge0.01",
+      "family": "cloddsbot",
+      "trades": 81,
+      "markets_traded": 81,
+      "wins": null,
+      "win_rate": null,
+      "net_pnl": 8.366077113480232,
+      "gross_pnl": 31.37848925553689,
+      "total_fees": 23.01241214205666,
+      "max_drawdown": 0.7123939393939409,
+      "avg_edge_gross": 0.03611111111111112,
+      "avg_pnl_net": 0.10328490263555842,
+      "total_notional": 810.0,
+      "n_markets": 200,
+      "skip_reasons": {
+        "no_series": 0,
+        "no_edge": 119,
+        "entered": 81
+      }
+    },
+    "cloddsbot_suite_sum_net_pnl": -163.00262902445863
+  },
+  "caveats": [
+    "Fair comparison uses ask_conservative / taker fees; bid_approx assumes maker fill at mid-0.005 with zero fee",
+    "Ask-gate polybot vs CloddsBot arb margin is ~$0.05 on $10 notional x ~80-100 trades — essentially a tie",
+    "No live orders",
+    "No historical L2 — bid/ask ≈ mid ± 0.005",
+    "polybot native 15m/1h adapted to 5m",
+    "CloddsBot MR/momentum use cross-market rolling mids (5m window too short for lookback 20)",
+    "Paper fills ≠ live fills",
+    "Profits not guaranteed"
+  ]
+}

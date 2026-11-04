@@ -1,0 +1,137 @@
+{
+  "mode": "fetch_multiday_trend_sr",
+  "path_label": "B_mid_sim_fetch_TREND3_WINDOWS_ONLY_197",
+  "note": "Only simulated windows where trend3 was up|down (197/864). Baseline here is NOT full-range; use FULL for apples-to-apples. Filtered n/WR/PnL matches FULL.",
+  "start": "2026-10-31 00:00:00 Asia/Shanghai",
+  "end": "2026-11-03 00:00:00 Asia/Shanghai",
+  "markets_ok_approx": 197,
+  "trend_prevalence": {
+    "up": 103,
+    "down": 94,
+    "other": 667,
+    "n_windows_in_range": 864,
+    "active_pct": 0.228
+  },
+  "rules_baseline_on_trend_windows_only": {
+    "R1": {
+      "n_scored": 166,
+      "wr": 0.8373,
+      "pnl_actual_sum": 44.6925
+    },
+    "R2": {
+      "n_scored": 152,
+      "wr": 0.8816,
+      "pnl_actual_sum": 28.8331
+    }
+  },
+  "rules_filtered": {
+    "R1": {
+      "label": "R1",
+      "n_candidates_incl_skips": 88,
+      "n_scored": 88,
+      "n_skipped": 0,
+      "n_open_stub": 0,
+      "wr": 0.8409,
+      "pnl_actual_sum": 24.284,
+      "pnl_size5_sum": 24.284,
+      "avg_buy_px": 0.7919,
+      "avg_rem": 203.0,
+      "by_rem": {
+        "180-240": {
+          "n": 66,
+          "pnl": 0.1297,
+          "wr": 0.803,
+          "avg_buy_px": 0.7965
+        },
+        "120-180": {
+          "n": 22,
+          "pnl": 24.1543,
+          "wr": 0.9545,
+          "avg_buy_px": 0.7782
+        }
+      },
+      "by_px": {
+        "0.80+": {
+          "n": 42,
+          "pnl": -9.1449,
+          "wr": 0.8571,
+          "avg_buy_px": 0.8802
+        },
+        "0.60-0.80": {
+          "n": 46,
+          "pnl": 33.4289,
+          "wr": 0.8261,
+          "avg_buy_px": 0.7113
+        }
+      },
+      "tags": {
+        "SETTLE_LOSS": 14,
+        "SETTLE_WIN": 28,
+        "WIN_099": 46
+      }
+    },
+    "R2": {
+      "label": "R2",
+      "n_candidates_incl_skips": 78,
+      "n_scored": 78,
+      "n_skipped": 0,
+      "n_open_stub": 0,
+      "wr": 0.8974,
+      "pnl_actual_sum": 9.1943,
+      "pnl_size5_sum": 9.1943,
+      "avg_buy_px": 0.8762,
+      "avg_rem": 176.3,
+      "by_rem": {
+        "180-240": {
+          "n": 30,
+          "pnl": -12.882,
+          "wr": 0.8,
+          "avg_buy_px": 0.8613
+        },
+        "120-180": {
+          "n": 22,
+          "pnl": 13.1248,
+          "wr": 1.0,
+          "avg_buy_px": 0.8834
+        },
+        "60-120": {
+          "n": 20,
+          "pnl": 9.1525,
+          "wr": 0.95,
+          "avg_buy_px": 0.9075
+        },
+        ">240": {
+          "n": 6,
+          "pnl": -0.201,
+          "wr": 0.8333,
+          "avg_buy_px": 0.82
+        }
+      },
+      "by_px": {
+        "0.80+": {
+          "n": 78,
+          "pnl": 9.1943,
+          "wr": 0.8974,
+          "avg_buy_px": 0.8762
+        }
+      },
+      "tags": {
+        "SETTLE_LOSS": 7,
+        "SETTLE_WIN": 24,
+        "WIN_099": 47
+      }
+    }
+  },
+  "block_stats_on_those_baselines": {
+    "R1": {
+      "total_baseline": 166,
+      "trend_side_mismatch": 79,
+      "sr_false": 1
+    },
+    "R2": {
+      "total_baseline": 152,
+      "trend_side_mismatch": 72,
+      "sr_false": 2
+    }
+  }
+}

@@ -1,0 +1,176 @@
+{
+  "mode": "session_replay",
+  "session_id": "20261103_0000_0300",
+  "generated_at_asia_shanghai": "2026-11-03T09:38:31.934556+08:00",
+  "size_usd_paper": 5.0,
+  "rules_text": {
+    "R1": "BUY fill/ask>=0.65, rem in (120,240]; SELL bid>=0.99 else hold-settle; $5; one side/window",
+    "R2": "BUY fill>=0.80; TP 0.99; skip rem<60; $5; one side/window",
+    "R3": "SKIP buy<=0.40 in this regime"
+  },
+  "tape": {
+    "n_fills": 60,
+    "n_roundtrips": 58,
+    "n_closed": 28,
+    "closed_pnl": 23.7957
+  },
+  "cross_check_summary": {
+    "summary_closed_pnl": 23.7957,
+    "summary_wr": 0.8214,
+    "summary_n_closed": 28,
+    "replay_closed_pnl": 23.7957,
+    "replay_n_closed": 28,
+    "R1_postmortem": {
+      "name": "R1_BUY_fav_ge065_rem_120_240_exit099",
+      "support_n": 12,
+      "wr": 1.0,
+      "avg_pnl": 0.9698,
+      "total_pnl": 11.6375,
+      "avg_buy_px": 0.8168,
+      "avg_rem": 185.4,
+      "counterexamples": []
+    },
+    "R2_postmortem": {
+      "name": "R2_BUY_ge080_any_rem_exit_ge095",
+      "support_n": 8,
+      "wr": 1.0,
+      "avg_pnl": 0.7474,
+      "total_pnl": 5.9789,
+      "avg_buy_px": 0.854,
+      "avg_rem": 177.4,
+      "counterexamples": []
+    },
+    "R3_postmortem": {
+      "name": "R3_BUY_cheap_le040",
+      "support_n": 2,
+      "wr": 0.0,
+      "avg_pnl": -2.7118,
+      "total_pnl": -5.4237,
+      "avg_buy_px": 0.3,
+      "avg_rem": 207,
+      "counterexamples": [
+        {
+          "slug": "btc-updown-5m-1793635200",
+          "outcome": "Down",
+          "buy_px": 0.3099999954,
+          "sell_px": 0.15,
+          "pnl": -2.372282,
+          "rem": 240
+        },
+        {
+          "slug": "btc-updown-5m-1793636100",
+          "outcome": "Down",
+          "buy_px": 0.2899999884,
+          "sell_px": 0.01,
+          "pnl": -3.05139,
+          "rem": 174
+        }
+      ]
+    }
+  },
+  "R3_skip_filter_on_closed": {
+    "n": 2,
+    "pnl": -5.4237,
+    "wr": 0.0,
+    "note": "These are documented skips — do not enter <=0.40 in this regime"
+  },
+  "rule_results": {
+    "R1": {
+      "label": "R1",
+      "n_candidates_incl_skips": 24,
+      "n_scored": 12,
+      "n_skipped": 11,
+      "n_open_stub": 1,
+      "wr": 1.0,
+      "pnl_actual_sum": 11.6375,
+      "pnl_size5_sum": 12.1507,
+      "avg_buy_px": 0.8168,
+      "avg_rem": 185.4,
+      "by_rem": {
+        "120-180": {
+          "n": 6,
+          "pnl": 5.6012,
+          "wr": 1.0,
+          "avg_buy_px": 0.815
+        },
+        "180-240": {
+          "n": 6,
+          "pnl": 6.0362,
+          "wr": 1.0,
+          "avg_buy_px": 0.8187
+        }
+      },
+      "by_px": {
+        "0.80+": {
+          "n": 8,
+          "pnl": 5.9789,
+          "wr": 1.0,
+          "avg_buy_px": 0.854
+        },
+        "0.60-0.80": {
+          "n": 4,
+          "pnl": 5.6586,
+          "wr": 1.0,
+          "avg_buy_px": 0.7425
+        }
+      },
+      "tags": {
+        "WIN_099": 12
+      },
+      "headline_closed_n": 12
+    },
+    "R2": {
+      "label": "R2",
+      "n_candidates_incl_skips": 17,
+      "n_scored": 8,
+      "n_skipped": 8,
+      "n_open_stub": 1,
+      "wr": 1.0,
+      "pnl_actual_sum": 5.9789,
+      "pnl_size5_sum": 5.9196,
+      "avg_buy_px": 0.854,
+      "avg_rem": 177.4,
+      "by_rem": {
+        "120-180": {
+          "n": 4,
+          "pnl": 2.9,
+          "wr": 1.0,
+          "avg_buy_px": 0.8575
+        },
+        "180-240": {
+          "n": 4,
+          "pnl": 3.0789,
+          "wr": 1.0,
+          "avg_buy_px": 0.8505
+        }
+      },
+      "by_px": {
+        "0.80+": {
+          "n": 8,
+          "pnl": 5.9789,
+          "wr": 1.0,
+          "avg_buy_px": 0.854
+        }
+      },
+      "tags": {
+        "WIN_099": 8
+      },
+      "headline_closed_n": 8
+    }
+  },
+  "caveats": [
+    "No live orders; paper only.",
+    "Cannot verify human latency / click timing / partial fills without L2 + own order log.",
+    "Cannot know maker vs taker fee per fill (activity has no fee field); session PnL is pre-explicit-fee.",
+    "Cannot reconstruct ask depth at click; --fetch uses mid ± 0.005 as ask/bid proxy.",
+    "One 3h session is high-variance; rules not statistically validated.",
+    "Dual-side skip is mechanical (both outcomes bought); no intent log for hedges.",
+    "Does not read .env; does not restart DAXUE/undervalued."
+  ],
+  "still_needs_for_multiday": [
+    "N-day dumped activity JSON (manual_activity_YYYYMMDD_*.json) for true fill-tape multi-day replay.",
+    "Or retained CLOB prices-history for each btc-updown-5m-{epoch} token + Gamma settle labels.",
+    "Optional denser UV HB logs covering the day range (open/spot) as settle cross-check.",
+    "Optional L2 snapshots if you want ask-at-click fidelity beyond mid±half-spread."
+  ]
+}

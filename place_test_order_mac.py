@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""~$1 Polymarket test BUY. Never prints keys/secrets."""
+from __future__ import annotations
+import json, os, sys
+
+def main() -> int:
+    key = os.environ.get("POLYMARKET_PRIVATE_KEY", "").strip()
+    if not key:
+        print("FAIL: POLYMARKET_PRIVATE_KEY missing"); return 1
+    if not key.startswith("0x"):
+        key = "0x" + key
+    funder = os.environ.get("POLYMARKET_FUNDER_ADDRESS") or os.environ.get("POLYMARKET_WALLET_ADDRESS") or "0xD18b881EA7babdDeB8d1cd01C309b9769FaF49B5"
+    host = "https://clob.polymarket.com"
+
+    import httpx
+    from py_clob_client_v2 import ClobClient
+    from py_clob_client_v2.clob_types import OrderArgs, OrderType
+    from py_clob_client_v2.order_builder.constants import BUY
+
+    try:
+        geo = httpx.get("https://polymarket.com/api/geoblock", timeout=20).json()
+        print("geoblock=", json.dumps(geo))
+        if geo.get("blocked") is True:
+            print("RESULT: GEOBLOCKED"); return 2
+    except Exception as e:
+        print("geoblock_probe_error=", type(e).__name__, e)
+
+    r = httpx.get(
+        "https://gamma-api.polymarket.com/markets",
+        params={"active":"true","closed":"false","limit":30,"order":"volume24hr","ascending":"false"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    picked=None
+    for m in r.json():
+        tokens=m.get("clobTokenIds")
+        if isinstance(tokens,str):
+            try: tokens=json.loads(tokens)
+            except Exception: tokens=None
+        if not tokens: continue
+        picked={"question": m.get("question") or m.get("title"), "token_id": str(tokens[0])}
+        break
+    if not picked:
+        print("FAIL: no market"); return 1
+    print("market=", picked["question"])
+
+    client=ClobClient(host, key=key, chain_id=137, signature_type=1, funder=funder)
+    client.set_api_creds(client.derive_api_key())
+    book=client.get_order_book(picked["token_id"])
+    asks=getattr(book,"asks",None) or (book.get("asks") if isinstance(book,dict) else []) or []
+    def px(level):
+        if isinstance(level, dict): return float(level.get("price") or level.get("p"))
+        return float(getattr(level,"price"))
+    best_ask=min((px(a) for a in asks), default=None)
+    if best_ask is None:
+        print("FAIL: empty asks"); return 1
+    price=round(best_ask,2)
+    size=max(1.0, round(1.0/price,2))
+    if size*price < 0.9:
+        size=round(1.0/price+0.01,2)
+    print(f"plan BUY price={price} size={size} notional≈{price*size:.4f}")
+    signed=client.create_order(OrderArgs(token_id=picked["token_id"], price=price, size=size, side=BUY))
+    print("signed_ok=True")
+    try:
+        resp=client.post_order(signed, OrderType.GTC)
+        print("post_order_resp=", json.dumps(resp, default=str)[:1500])
+        print("RESULT: SUCCESS"); return 0
+    except Exception as e:
+        print("post_order_FAIL", type(e).__name__, e)
+        print("RESULT: FAIL"); return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

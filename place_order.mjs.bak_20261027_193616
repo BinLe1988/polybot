@@ -1,0 +1,247 @@
+#!/usr/bin/env node
+/**
+ * Limited live order helper.
+ * Caps every order by POLYMARKET_MAX_ORDER_USD (env file or process.env).
+ *
+ * Usage:
+ *   node place_order.mjs --slug btc-updown-5m-<ts> --outcome up|down --side BUY|SELL --amount 2
+ *   node place_order.mjs --slug ... --outcome down --side BUY --amount 2 --dry
+ *
+ * Exit 0 only if response.ok (or --dry succeeded). Prints JSON.
+ */
+import { createSecureClient, OrderSide } from "@polymarket/client";
+import { privateKey } from "@polymarket/client/viem";
+import { readFileSync, existsSync } from "fs";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+
+function loadDotEnv() {
+  const path = join(dirname(fileURLToPath(import.meta.url)), ".env");
+  if (!existsSync(path)) return {};
+  return Object.fromEntries(
+    readFileSync(path, "utf8")
+      .split(/\n/)
+      .filter((l) => l && !l.startsWith("#") && l.includes("="))
+      .map((l) => {
+        const i = l.indexOf("=");
+        return [l.slice(0, i).trim(), l.slice(i + 1).trim()];
+      })
+  );
+}
+
+function parseArgs(argv = process.argv.slice(2)) {
+  const args = {};
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i].startsWith("--")) {
+      const k = argv[i].slice(2);
+      const v = argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[++i] : "true";
+      args[k] = v;
+    }
+  }
+  return args;
+}
+
+/** Same pattern as strategy_btc5m_cs.mjs */
+function assetIdForOutcome(market, names) {
+  const entries = Object.entries(market.outcomes || {});
+  for (const want of names) {
+    for (const [k, v] of entries) {
+      if (String(k).toLowerCase() === want.toLowerCase()) {
+        return market.version === "v2" ? v.positionId : v.tokenId;
+      }
+    }
+  }
+  for (const [, v] of entries) {
+    const n = String(v?.name || "").toLowerCase();
+    if (names.some((w) => n === w.toLowerCase())) {
+      return market.version === "v2" ? v.positionId : v.tokenId;
+    }
+  }
+  return null;
+}
+
+function outcomeNames(outcome) {
+  const o = String(outcome || "").toLowerCase();
+  if (o === "up" || o === "yes") return ["Up", "yes", "UP", "Yes"];
+  if (o === "down" || o === "no") return ["Down", "no", "DOWN", "No"];
+  return null;
+}
+
+const args = parseArgs();
+const env = loadDotEnv();
+const MAX = Number(
+  process.env.POLYMARKET_MAX_ORDER_USD || env.POLYMARKET_MAX_ORDER_USD || 10
+);
+const dry =
+  args.dry === "true" || args.dry === "1" || args.help === "true" || args.help === "1";
+
+if (args.help === "true" || args.help === "1") {
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        help: true,
+        usage:
+          "node place_order.mjs --slug btc-updown-5m-<ts> --outcome up|down --side BUY|SELL --amount <usd> [--shares N|--price P] [--dry]",
+        caps: { POLYMARKET_MAX_ORDER_USD: MAX },
+        flags: ["slug", "outcome", "side", "amount", "dry", "help"],
+      },
+      null,
+      2
+    )
+  );
+  process.exit(0);
+}
+
+let pk = (env.POLYMARKET_PRIVATE_KEY || "").trim();
+if (!pk) {
+  console.error(JSON.stringify({ ok: false, error: "POLYMARKET_PRIVATE_KEY missing" }));
+  process.exit(1);
+}
+if (!pk.startsWith("0x")) pk = "0x" + pk;
+const wallet =
+  env.POLYMARKET_WALLET_ADDRESS || "0xD18b881EA7babdDeB8d1cd01C309b9769FaF49B5";
+
+const amount = Number(args.amount || "1");
+if (!(amount > 0) || amount > MAX) {
+  console.error(
+    JSON.stringify({
+      ok: false,
+      error: "amount_cap",
+      amount,
+      max: MAX,
+      message: `amount must be in (0, ${MAX}]`,
+    })
+  );
+  process.exit(1);
+}
+
+const sideStr = (args.side || "BUY").toUpperCase();
+const side = sideStr === "SELL" ? OrderSide.SELL : OrderSide.BUY;
+const outcome = (args.outcome || "").toLowerCase();
+const names = outcome ? outcomeNames(outcome) : null;
+
+if (outcome && !names) {
+  console.error(
+    JSON.stringify({
+      ok: false,
+      error: "bad_outcome",
+      outcome,
+      message: "outcome must be up|down (or yes|no)",
+    })
+  );
+  process.exit(1);
+}
+
+try {
+  const client = await createSecureClient({ wallet, signer: privateKey(pk) });
+  let market;
+  if (args.slug) market = await client.fetchMarket({ slug: args.slug });
+  else
+    market = (await client.listMarkets({ closed: false, pageSize: 10 }).firstPage())
+      .items[0];
+
+  let assetId;
+  if (names) {
+    assetId = assetIdForOutcome(market, names);
+    if (!assetId) {
+      console.log(
+        JSON.stringify(
+          {
+            ok: false,
+            error: "missing_asset_id",
+            slug: market?.slug,
+            outcome,
+            outcomeKeys: Object.keys(market?.outcomes || {}),
+          },
+          null,
+          2
+        )
+      );
+      process.exit(1);
+    }
+  } else {
+    // legacy default: yes / Up
+    const yes = market.outcomes.yes || market.outcomes.Up || market.outcomes.up;
+    if (!yes) {
+      assetId = assetIdForOutcome(market, ["Up", "yes"]);
+    } else {
+      assetId = market.version === "v2" ? yes.positionId : yes.tokenId;
+    }
+  }
+
+  // BUY uses USD amount; SELL uses shares (SDK PrepareMarketSellOrderRequest)
+  let shares = args.shares != null ? Number(args.shares) : null;
+  const priceHint = args.price != null ? Number(args.price) : null;
+  if (sideStr === "SELL") {
+    if (!(shares > 0) && priceHint > 0 && amount > 0) {
+      shares = Math.floor((amount / priceHint) * 10000) / 10000;
+    }
+    if (!(shares > 0)) {
+      console.error(
+        JSON.stringify({
+          ok: false,
+          error: "sell_needs_shares",
+          message: "SELL requires --shares N (or --amount + --price to derive)",
+        })
+      );
+      process.exit(1);
+    }
+  }
+
+  if (dry) {
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          dry: true,
+          market: market.slug,
+          outcome: outcome || "default_yes",
+          side: sideStr,
+          amount: sideStr === "BUY" ? amount : undefined,
+          shares: sideStr === "SELL" ? shares : undefined,
+          max: MAX,
+          assetId: String(assetId).slice(0, 12) + "…",
+          outcomeKeys: Object.keys(market.outcomes || {}),
+          action: "would_place",
+        },
+        null,
+        2
+      )
+    );
+    process.exit(0);
+  }
+
+  let response;
+  if (sideStr === "SELL") {
+    response = await client.placeMarketOrder({
+      assetId,
+      side,
+      shares: String(shares),
+    });
+  } else {
+    response = await client.placeMarketOrder({
+      assetId,
+      side,
+      amount: String(amount),
+    });
+  }
+  console.log(
+    JSON.stringify(
+      {
+        market: market.slug,
+        outcome: outcome || "default_yes",
+        side: sideStr,
+        amount: sideStr === "BUY" ? amount : undefined,
+        shares: sideStr === "SELL" ? shares : undefined,
+        ...response,
+      },
+      null,
+      2
+    )
+  );
+  if (!response.ok) process.exit(1);
+} catch (e) {
+  console.error(JSON.stringify({ ok: false, error: String(e?.message || e) }));
+  process.exit(1);
+}

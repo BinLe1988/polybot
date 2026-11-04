@@ -1,0 +1,29 @@
+# BTC 5m settlement (DAXUE reviews)
+
+**Primary W/L source:** Polymarket Gamma market resolution — never Binance
+next-5m-window-open.
+
+## Helper
+
+```bash
+cd /Users/nick/poly-test
+# one slug
+python3 btc5m_poly_settle.py resolve btc-updown-5m-1793165700 --side UP --ask 0.37 --fill-px 0.37 --cost 2 --json
+
+# last 5 DAXUE fills → markdown review (writes optional)
+python3 daxue_five_trade_review.py --last 5 --md
+python3 daxue_five_trade_review.py --after '2026-10-28 16:38:00' --last 5 --write
+```
+
+Resolved when Gamma `umaResolutionStatus=resolved` (or closed + decisive
+`outcomePrices` ≈ 0/1). Winner = outcome priced ~1. If not resolved → **PENDING**
+(do not guess).
+
+PnL: prefer `fill_px`, else `decision_ask`; win = cost×(1/px−1), loss = −cost.
+
+Optional next-open vs window-open may be noted as **参考 only**, never as W/L.
+
+## Routine (btc-5m)
+
+15m monitor must shell the helper above when writing `logs/reviews/daxue_review_*.md`.
+If the saved routine prompt still encodes next-open heuristic, UpdateRoutine.

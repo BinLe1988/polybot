@@ -1,0 +1,45 @@
+# BTC 5m settlement (DAXUE reviews)
+
+**Primary W/L source:** Polymarket Gamma market resolution — never Binance
+next-5m-window-open.
+
+## Helper
+
+```bash
+cd /Users/nick/poly-test
+# one slug
+python3 btc5m_poly_settle.py resolve btc-updown-5m-1793165700 --side UP --ask 0.37 --fill-px 0.37 --cost 2 --json
+
+# last 5 DAXUE fills → markdown review (writes optional)
+python3 daxue_five_trade_review.py --last 5 --md
+python3 daxue_five_trade_review.py --after '2026-10-28 16:38:00' --last 5 --write
+```
+
+Resolved when Gamma `umaResolutionStatus=resolved` (or closed + decisive
+`outcomePrices` ≈ 0/1). Winner = outcome priced ~1. If not resolved → **PENDING**
+(do not guess).
+
+PnL: prefer `fill_px`, else `decision_ask`; win = cost×(1/px−1), loss = −cost.
+
+Optional next-open vs window-open may be noted as **参考 only**, never as W/L.
+
+## Routine (btc-5m)
+
+15m monitor must shell the helper above when writing `logs/reviews/daxue_review_*.md`.
+If the saved routine prompt still encodes next-open heuristic, UpdateRoutine.
+
+## Edge snapshot + capital protection
+
+```bash
+# Edge verification (n, WR, mean_fill, WR−mean_fill, day_pnl vs stops)
+python3 daxue_edge_snapshot.py
+python3 daxue_edge_snapshot.py --days 3
+```
+
+Live circuit breakers (in `btc5m_daxue_live.py`, state `logs/daxue_day_state_YYYYMMDD.json`):
+- `DAY_LOSS_STOP` default $7 — stop new ENTRYs when day PnL ≤ −$7 (Asia/Shanghai day)
+- `CONSEC_LOSS_PAUSE` default 3 / `PAUSE_MIN` default 30 — pause after 3 settled losses
+- `BIG_WIN_LOCK` default $6 + `LOCK_GAINS=1` — after one settled leg PnL > $6, lock day (hold open to settle). Alias: `LOCK_WIN_PNL`.
+- `DAY_PROFIT_LOCK` default $15 (env `DAY_PROFIT_LOCK` / `DAXUE_DAY_PROFIT_LOCK`) — lock when `(day_pnl_settled − profit_lock_baseline) ≥ $15`. Sticky once on. `manual_unlock` sets `profit_lock_baseline=day_pnl_settled` so another full +$15 of settled PnL is required before re-lock (not merely `day_pnl ≥ $15` and `day_pnl > baseline`).
+- `DAILY_TARGET_SOFT` — legacy soft day-cumulative lock; unused (compat only)
+

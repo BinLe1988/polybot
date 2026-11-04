@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Clear sticky DAY_LOSS / LOCK_GAINS / DAY_PROFIT_LOCK for today and print JSON status.
+
+Does not start/stop the live process — restart btc5m_daxue_live.py after unlock
+so the running process reloads day_state (or pick up on next MAX_RUN restart).
+
+Usage:
+  cd /Users/nick/poly-test && .venv/bin/python daxue_manual_unlock.py
+  .venv/bin/python daxue_manual_unlock.py --reason chat
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+
+from daxue_day_risk import DayRiskState  # noqa: E402
+
+
+def default_config() -> dict:
+    return {
+        "DAY_LOSS_STOP": float(os.getenv("DAY_LOSS_STOP", os.getenv("DAXUE_DAY_LOSS_STOP", "7"))),
+        "CONSEC_LOSS_PAUSE": int(os.getenv("CONSEC_LOSS_PAUSE", "3")),
+        "PAUSE_MIN": int(os.getenv("PAUSE_MIN", "30")),
+        "BIG_WIN_LOCK": float(os.getenv("BIG_WIN_LOCK", "6")),
+        "LOCK_GAINS": os.getenv("LOCK_GAINS", os.getenv("DAXUE_LOCK_GAINS", "1")) not in (
+            "0",
+            "false",
+            "False",
+            "no",
+            "NO",
+        ),
+        "DAY_PROFIT_LOCK": float(
+            os.getenv("DAY_PROFIT_LOCK", os.getenv("DAXUE_DAY_PROFIT_LOCK", "15"))
+        ),
+        "DAILY_TARGET_SOFT": float(os.getenv("DAILY_TARGET_SOFT", "0.8")),
+    }
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Manual unlock DAXUE day entry locks")
+    ap.add_argument("--reason", default="cli", help="audit tag in day_state log")
+    ap.add_argument(
+        "--logs-dir",
+        default=str(SCRIPT_DIR / "logs"),
+        help="logs directory holding daxue_day_state_YYYYMMDD.json",
+    )
+    args = ap.parse_args()
+    state = DayRiskState(Path(args.logs_dir), default_config())
+    out = state.manual_unlock(reason=str(args.reason))
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+    return 0 if out.get("ok") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

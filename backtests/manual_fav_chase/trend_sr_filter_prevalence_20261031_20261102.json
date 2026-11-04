@@ -1,0 +1,398 @@
+{
+  "note": "trend lookback TREND_N=3 (not 6); recomputed",
+  "windows": 864,
+  "trend3_up": 103,
+  "trend3_down": 94,
+  "trend3_other": 667,
+  "trend3_active_pct": 0.228,
+  "pathA_session": {
+    "R1": {
+      "baseline": {
+        "label": "R1",
+        "n_candidates_incl_skips": 13,
+        "n_scored": 3,
+        "n_skipped": 10,
+        "n_open_stub": 0,
+        "wr": 1.0,
+        "pnl_actual_sum": 0.8349,
+        "pnl_size5_sum": 4.1242,
+        "avg_buy_px": 0.7667,
+        "avg_rem": 187.0,
+        "by_rem": {
+          "120-180": {
+            "n": 2,
+            "pnl": 0.4449,
+            "wr": 1.0,
+            "avg_buy_px": 0.8
+          },
+          "180-240": {
+            "n": 1,
+            "pnl": 0.39,
+            "wr": 1.0,
+            "avg_buy_px": 0.7
+          }
+        },
+        "by_px": {
+          "0.80+": {
+            "n": 1,
+            "pnl": 0.1924,
+            "wr": 1.0,
+            "avg_buy_px": 0.82
+          },
+          "0.60-0.80": {
+            "n": 2,
+            "pnl": 0.6425,
+            "wr": 1.0,
+            "avg_buy_px": 0.74
+          }
+        },
+        "tags": {
+          "WIN_099": 3
+        }
+      },
+      "filtered": {
+        "label": "R1",
+        "n_candidates_incl_skips": 13,
+        "n_scored": 0,
+        "n_skipped": 13,
+        "n_open_stub": 0,
+        "wr": null,
+        "pnl_actual_sum": 0,
+        "pnl_size5_sum": 0,
+        "avg_buy_px": null,
+        "avg_rem": null,
+        "by_rem": {},
+        "by_px": {},
+        "tags": {}
+      },
+      "filter_stats": {
+        "n_baseline_scored": 3,
+        "n_filtered_scored": 0,
+        "n_blocked_by_filters": 13,
+        "n_blocked_trend6": 13,
+        "n_blocked_sr_false": 0,
+        "blocked_slugs": [
+          "btc-updown-5m-1793457600:Down",
+          "btc-updown-5m-1793457600:Down",
+          "btc-updown-5m-1793459100:Up",
+          "btc-updown-5m-1793459100:Up",
+          "btc-updown-5m-1793459400:Up",
+          "btc-updown-5m-1793459400:Up",
+          "btc-updown-5m-1793459700:Up",
+          "btc-updown-5m-1793459700:Up",
+          "btc-updown-5m-1793546100:Down",
+          "btc-updown-5m-1793546100:Down",
+          "btc-updown-5m-1793631600:Up",
+          "btc-updown-5m-1793631600:Up",
+          "btc-updown-5m-1793633700:Down"
+        ]
+      }
+    },
+    "R2": {
+      "baseline": {
+        "label": "R2",
+        "n_candidates_incl_skips": 7,
+        "n_scored": 3,
+        "n_skipped": 4,
+        "n_open_stub": 0,
+        "wr": 1.0,
+        "pnl_actual_sum": 1.0161,
+        "pnl_size5_sum": 2.0498,
+        "avg_buy_px": 0.8633,
+        "avg_rem": 161.7,
+        "by_rem": {
+          "120-180": {
+            "n": 1,
+            "pnl": 0.1924,
+            "wr": 1.0,
+            "avg_buy_px": 0.82
+          },
+          ">240": {
+            "n": 1,
+            "pnl": 0.1843,
+            "wr": 1.0,
+            "avg_buy_px": 0.9
+          },
+          "60-120": {
+            "n": 1,
+            "pnl": 0.6394,
+            "wr": 1.0,
+            "avg_buy_px": 0.87
+          }
+        },
+        "by_px": {
+          "0.80+": {
+            "n": 3,
+            "pnl": 1.0161,
+            "wr": 1.0,
+            "avg_buy_px": 0.8633
+          }
+        },
+        "tags": {
+          "WIN_099": 3
+        }
+      },
+      "filtered": {
+        "label": "R2",
+        "n_candidates_incl_skips": 7,
+        "n_scored": 0,
+        "n_skipped": 7,
+        "n_open_stub": 0,
+        "wr": null,
+        "pnl_actual_sum": 0,
+        "pnl_size5_sum": 0,
+        "avg_buy_px": null,
+        "avg_rem": null,
+        "by_rem": {},
+        "by_px": {},
+        "tags": {}
+      },
+      "filter_stats": {
+        "n_baseline_scored": 3,
+        "n_filtered_scored": 0,
+        "n_blocked_by_filters": 7,
+        "n_blocked_trend6": 7,
+        "n_blocked_sr_false": 0,
+        "blocked_slugs": [
+          "btc-updown-5m-1793457600:Down",
+          "btc-updown-5m-1793457600:Down",
+          "btc-updown-5m-1793458500:Down",
+          "btc-updown-5m-1793458500:Down",
+          "btc-updown-5m-1793459100:Up",
+          "btc-updown-5m-1793544900:Up",
+          "btc-updown-5m-1793544900:Up"
+        ]
+      }
+    }
+  },
+  "pathB_trend_windows_only": {
+    "note": "BASELINE here is R1/R2 only on the 197 trend3-active windows — not full-range baseline",
+    "filters": {
+      "trend_n": 3,
+      "trend6": true,
+      "trend3": true,
+      "sr1000": true,
+      "trend_windows_only": true,
+      "trend_prevalence": {
+        "up": 103,
+        "down": 94,
+        "other": 667,
+        "n_windows_in_range": 864,
+        "active_pct": 0.228
+      },
+      "trend6_def": "ALIAS: prior 3 completed 5m close-to-close monotonic; Up chase only if up; Down only if down",
+      "trend3_def": "prior 3 completed 5m close-to-close monotonic (need 4 closes); Up chase only if up; Down only if down",
+      "sr1000_def": "levels every 1000; near=150.0; pierce=20.0; false=pierce+reclaim within 2 bars; true=close beyond+hold 1; gate=skip false only",
+      "klines_n": 871,
+      "klines_source": "data-api.binance.vision BTCUSDT 5m"
+    },
+    "rules_baseline": {
+      "R1": {
+        "label": "R1",
+        "n_candidates_incl_skips": 166,
+        "n_scored": 166,
+        "n_skipped": 0,
+        "n_open_stub": 0,
+        "wr": 0.8373,
+        "pnl_actual_sum": 44.6925,
+        "pnl_size5_sum": 44.6925,
+        "avg_buy_px": 0.7886,
+        "avg_rem": 200.9,
+        "by_rem": {
+          "180-240": {
+            "n": 120,
+            "pnl": 27.6846,
+            "wr": 0.825,
+            "avg_buy_px": 0.787
+          },
+          "120-180": {
+            "n": 46,
+            "pnl": 17.0079,
+            "wr": 0.8696,
+            "avg_buy_px": 0.7926
+          }
+        },
+        "by_px": {
+          "0.80+": {
+            "n": 74,
+            "pnl": 6.6283,
+            "wr": 0.8919,
+            "avg_buy_px": 0.8757
+          },
+          "0.60-0.80": {
+            "n": 92,
+            "pnl": 38.0642,
+            "wr": 0.7935,
+            "avg_buy_px": 0.7185
+          }
+        },
+        "tags": {
+          "SETTLE_LOSS": 26,
+          "SETTLE_WIN": 49,
+          "WIN_099": 91
+        }
+      },
+      "R2": {
+        "label": "R2",
+        "n_candidates_incl_skips": 152,
+        "n_scored": 152,
+        "n_skipped": 0,
+        "n_open_stub": 0,
+        "wr": 0.8816,
+        "pnl_actual_sum": 28.8331,
+        "pnl_size5_sum": 28.8331,
+        "avg_buy_px": 0.8811,
+        "avg_rem": 166.3,
+        "by_rem": {
+          "180-240": {
+            "n": 49,
+            "pnl": 0.4714,
+            "wr": 0.8776,
+            "avg_buy_px": 0.8633
+          },
+          "120-180": {
+            "n": 53,
+            "pnl": 8.6921,
+            "wr": 0.9245,
+            "avg_buy_px": 0.8812
+          },
+          "60-120": {
+            "n": 43,
+            "pnl": 19.1037,
+            "wr": 0.8372,
+            "avg_buy_px": 0.9105
+          },
+          ">240": {
+            "n": 7,
+            "pnl": 0.5659,
+            "wr": 0.8571,
+            "avg_buy_px": 0.8243
+          }
+        },
+        "by_px": {
+          "0.80+": {
+            "n": 152,
+            "pnl": 28.8331,
+            "wr": 0.8816,
+            "avg_buy_px": 0.8811
+          }
+        },
+        "tags": {
+          "SETTLE_LOSS": 11,
+          "SETTLE_WIN": 44,
+          "WIN_099": 97
+        }
+      }
+    },
+    "rules_filtered": {
+      "R1": {
+        "label": "R1",
+        "n_candidates_incl_skips": 88,
+        "n_scored": 88,
+        "n_skipped": 0,
+        "n_open_stub": 0,
+        "wr": 0.8409,
+        "pnl_actual_sum": 24.284,
+        "pnl_size5_sum": 24.284,
+        "avg_buy_px": 0.7919,
+        "avg_rem": 203.0,
+        "by_rem": {
+          "180-240": {
+            "n": 66,
+            "pnl": 0.1297,
+            "wr": 0.803,
+            "avg_buy_px": 0.7965
+          },
+          "120-180": {
+            "n": 22,
+            "pnl": 24.1543,
+            "wr": 0.9545,
+            "avg_buy_px": 0.7782
+          }
+        },
+        "by_px": {
+          "0.80+": {
+            "n": 42,
+            "pnl": -9.1449,
+            "wr": 0.8571,
+            "avg_buy_px": 0.8802
+          },
+          "0.60-0.80": {
+            "n": 46,
+            "pnl": 33.4289,
+            "wr": 0.8261,
+            "avg_buy_px": 0.7113
+          }
+        },
+        "tags": {
+          "SETTLE_LOSS": 14,
+          "SETTLE_WIN": 28,
+          "WIN_099": 46
+        }
+      },
+      "R2": {
+        "label": "R2",
+        "n_candidates_incl_skips": 78,
+        "n_scored": 78,
+        "n_skipped": 0,
+        "n_open_stub": 0,
+        "wr": 0.8974,
+        "pnl_actual_sum": 9.1943,
+        "pnl_size5_sum": 9.1943,
+        "avg_buy_px": 0.8762,
+        "avg_rem": 176.3,
+        "by_rem": {
+          "180-240": {
+            "n": 30,
+            "pnl": -12.882,
+            "wr": 0.8,
+            "avg_buy_px": 0.8613
+          },
+          "120-180": {
+            "n": 22,
+            "pnl": 13.1248,
+            "wr": 1.0,
+            "avg_buy_px": 0.8834
+          },
+          "60-120": {
+            "n": 20,
+            "pnl": 9.1525,
+            "wr": 0.95,
+            "avg_buy_px": 0.9075
+          },
+          ">240": {
+            "n": 6,
+            "pnl": -0.201,
+            "wr": 0.8333,
+            "avg_buy_px": 0.82
+          }
+        },
+        "by_px": {
+          "0.80+": {
+            "n": 78,
+            "pnl": 9.1943,
+            "wr": 0.8974,
+            "avg_buy_px": 0.8762
+          }
+        },
+        "tags": {
+          "SETTLE_LOSS": 7,
+          "SETTLE_WIN": 24,
+          "WIN_099": 47
+        }
+      }
+    },
+    "block_stats": {
+      "R1": {
+        "trend6": 79,
+        "sr_false": 1,
+        "total_baseline": 166
+      },
+      "R2": {
+        "trend6": 72,
+        "sr_false": 2,
+        "total_baseline": 152
+      }
+    }
+  }
+}

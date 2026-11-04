@@ -1,0 +1,120 @@
+{
+  "mode": "fetch_multiday",
+  "start": "2026-11-02 00:00:00 Asia/Shanghai",
+  "end": "2026-11-03 00:00:00 Asia/Shanghai",
+  "markets_ok": 96,
+  "markets_fail_or_skip": 0,
+  "rules": {
+    "R1": {
+      "label": "R1",
+      "n_candidates_incl_skips": 88,
+      "n_scored": 88,
+      "n_skipped": 0,
+      "n_open_stub": 0,
+      "wr": 0.8182,
+      "pnl_actual_sum": 9.3011,
+      "pnl_size5_sum": 9.3011,
+      "avg_buy_px": 0.7899,
+      "avg_rem": 202.8,
+      "by_rem": {
+        "180-240": {
+          "n": 63,
+          "pnl": 11.2649,
+          "wr": 0.8254,
+          "avg_buy_px": 0.7874
+        },
+        "120-180": {
+          "n": 25,
+          "pnl": -1.9638,
+          "wr": 0.8,
+          "avg_buy_px": 0.7962
+        }
+      },
+      "by_px": {
+        "0.60-0.80": {
+          "n": 46,
+          "pnl": 22.7329,
+          "wr": 0.8043,
+          "avg_buy_px": 0.7148
+        },
+        "0.80+": {
+          "n": 42,
+          "pnl": -13.4318,
+          "wr": 0.8333,
+          "avg_buy_px": 0.8721
+        }
+      },
+      "tags": {
+        "SETTLE_LOSS": 16,
+        "SETTLE_WIN": 19,
+        "WIN_099": 53
+      }
+    },
+    "R2": {
+      "label": "R2",
+      "n_candidates_incl_skips": 77,
+      "n_scored": 77,
+      "n_skipped": 0,
+      "n_open_stub": 0,
+      "wr": 0.8701,
+      "pnl_actual_sum": -8.8803,
+      "pnl_size5_sum": -8.8803,
+      "avg_buy_px": 0.8764,
+      "avg_rem": 171.2,
+      "by_rem": {
+        "180-240": {
+          "n": 29,
+          "pnl": -9.3372,
+          "wr": 0.8276,
+          "avg_buy_px": 0.8681
+        },
+        "60-120": {
+          "n": 20,
+          "pnl": 0.629,
+          "wr": 0.9,
+          "avg_buy_px": 0.886
+        },
+        "120-180": {
+          "n": 26,
+          "pnl": 3.9802,
+          "wr": 0.9231,
+          "avg_buy_px": 0.881
+        },
+        ">240": {
+          "n": 2,
+          "pnl": -4.1523,
+          "wr": 0.5,
+          "avg_buy_px": 0.84
+        }
+      },
+      "by_px": {
+        "0.80+": {
+          "n": 77,
+          "pnl": -8.8803,
+          "wr": 0.8701,
+          "avg_buy_px": 0.8764
+        }
+      },
+      "tags": {
+        "SETTLE_LOSS": 10,
+        "SETTLE_WIN": 17,
+        "WIN_099": 50
+      }
+    }
+  },
+  "caveats": [
+    "No live orders; paper only.",
+    "Cannot verify human latency / click timing / partial fills without L2 + own order log.",
+    "Cannot know maker vs taker fee per fill (activity has no fee field); session PnL is pre-explicit-fee.",
+    "Cannot reconstruct ask depth at click; --fetch uses mid ± 0.005 as ask/bid proxy.",
+    "One 3h session is high-variance; rules not statistically validated.",
+    "Dual-side skip is mechanical (both outcomes bought); no intent log for hedges.",
+    "Does not read .env; does not restart DAXUE/undervalued."
+  ],
+  "still_needs": [
+    "N-day dumped activity JSON (manual_activity_YYYYMMDD_*.json) for true fill-tape multi-day replay.",
+    "Or retained CLOB prices-history for each btc-updown-5m-{epoch} token + Gamma settle labels.",
+    "Optional denser UV HB logs covering the day range (open/spot) as settle cross-check.",
+    "Optional L2 snapshots if you want ask-at-click fidelity beyond mid±half-spread."
+  ]
+}

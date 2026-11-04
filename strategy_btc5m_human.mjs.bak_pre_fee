@@ -1,0 +1,632 @@
+#!/usr/bin/env node
+/**
+ * BTC 5m Human principles strategy (dry-run by default).
+ * 将用户实盘原则量化为可执行规则 — 详见 RULES.md / 文件顶注释。
+ *
+ * Live only if --live AND POLYMARKET_LIVE=1；本版 dry-run 仅输出意图，不真正下单。
+ * Proxy: NODE_OPTIONS=--use-env-proxy HTTPS_PROXY=http://127.0.0.1:7890
+ *
+ * 原则 → 阈值（摘要）:
+ *  1  ≤2min 不明朗 → hedge
+ *  2  前3min 绝对优势 → buy_fav_limit 降成本
+ *  3  前2min gap≥40¢ → add_at_80
+ *  4  remaining≤60s → skip
+ *  5  方向错 → cut_hedge x=1
+ *  6/13/20  仓位帽 $2/腿、$6/总、bankroll$20
+ *  7  持续 gap<0.12 → skip
+ *  8  mid路径均值回归偏置
+ *  9  单笔≈10%=$2
+ * 10  oscillate+fav≥0.75 → 2/3仓
+ * 11  unclear → quote_50 maker
+ * 12  ≤2min且gap≤0.20 需 fav≥0.80 否则 skip
+ * 14  优先 postOnly/maker
+ * 15/19  最多1次加码，无连续加
+ * 16  低波动 size×0.5
+ * 18  min$0.40；mid≥0.90 take_profit
+ * 21  trend 单向 → skip，只做 oscillate
+ */
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+import { loadEnv, parseArgs } from "./lib_env.mjs";
+
+const DIR = dirname(fileURLToPath(import.meta.url));
+const STATE_PATH = join(DIR, "logs", "btc5m_human_state.json");
+
+// —— 量化常量 ——
+const BANKROLL0 = 20;
+const MAX_LEG = 2;
+const MAX_POS_FRAC = 0.3; // 30% bankroll
+const MIN_LEG = 0.4; // 20% of $2
+const LATE_SEC = 60;
+const HEDGE_REMAIN_SEC = 120;
+const EARLY_ADV_ELAPSED = 180; // 前3分钟
+const ADD80_ELAPSED = 120; // 前2分钟
+const FAV_CLEAR = 0.65;
+const GAP_CLEAR = 0.3;
+const GAP_ADD40 = 0.4;
+const GAP_UNCLEAR = 0.12;
+const GAP_SOFT = 0.15;
+const GAP_LATE_EDGE = 0.2;
+const FAV_HIGH_CONF = 0.8;
+const FAV_BIG = 0.75;
+const TAKE_PROFIT_MID = 0.9;
+const WRONG_SIDE_MID = 0.4;
+const OPP_STRONG = 0.55;
+const LOW_RANGE = 0.08;
+const HEDGE_X = 1;
+const UNCLEAR_STREAK = 3;
+const TREND_STREAK = 4;
+const TREND_MOVE = 0.08;
+const WINDOW_SEC = 300;
+
+function windowStarts(base = Math.floor(Date.now() / 1000)) {
+  const cur = Math.floor(base / 300) * 300;
+  return [cur, cur + 300, cur + 600, cur - 300];
+}
+
+async function fetchJson(url) {
+  const res = await fetch(url, {
+    headers: { Accept: "application/json", "User-Agent": "poly-human/1.0" },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
+  return res.json();
+}
+
+async function gammaBySlug(slug) {
+  const data = await fetchJson(
+    `https://gamma-api.polymarket.com/markets?slug=${encodeURIComponent(slug)}`
+  );
+  return Array.isArray(data) ? data[0] || null : data;
+}
+
+function parseTokens(m) {
+  let tokens = m.clobTokenIds;
+  if (typeof tokens === "string") tokens = JSON.parse(tokens);
+  let outs = m.outcomes;
+  if (typeof outs === "string") outs = JSON.parse(outs);
+  if (!tokens || tokens.length < 2) return null;
+  const upI = outs?.indexOf?.("Up") ?? 0;
+  const downI = outs?.indexOf?.("Down") ?? 1;
+  return { up: String(tokens[upI]), down: String(tokens[downI]), outcomes: outs };
+}
+
+async function bestBook(tokenId) {
+  const book = await fetchJson(`https://clob.polymarket.com/book?token_id=${tokenId}`);
+  const asks = book.asks || [];
+  const bids = book.bids || [];
+  const ask = asks.length ? Math.min(...asks.map((a) => Number(a.price))) : null;
+  const bid = bids.length ? Math.max(...bids.map((b) => Number(b.price))) : null;
+  return { ask, bid };
+}
+
+function mid(bid, ask) {
+  if (bid != null && ask != null) return (bid + ask) / 2;
+  if (ask != null) return ask;
+  if (bid != null) return bid;
+  return null;
+}
+
+function loadState() {
+  try {
+    if (!existsSync(STATE_PATH)) return null;
+    return JSON.parse(readFileSync(STATE_PATH, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function saveState(st) {
+  mkdirSync(join(DIR, "logs"), { recursive: true });
+  writeFileSync(STATE_PATH, JSON.stringify(st, null, 2));
+}
+
+function defaultState(slug, bankroll) {
+  return {
+    slug,
+    bankroll,
+    upMidHist: [],
+    downMidHist: [],
+    unclearStreak: 0,
+    position: null, // { side: 'Up'|'Down', notional, avgPrice, adds, openedAt }
+    lastAction: null,
+    lastAddAt: null,
+    tick: 0,
+  };
+}
+
+/** 从 mid 历史推断 regime */
+function inferRegime(upHist, downHist, gap, remainingSec) {
+  if (remainingSec <= LATE_SEC) return "late";
+  if (gap < GAP_UNCLEAR) return "unclear";
+
+  const n = upHist.length;
+  if (n < 3) return gap < GAP_SOFT ? "unclear" : "oscillate";
+
+  const recent = upHist.slice(-6);
+  let upMoves = 0;
+  let downMoves = 0;
+  let flips = 0;
+  for (let i = 1; i < recent.length; i++) {
+    const d = recent[i] - recent[i - 1];
+    if (d > 0.01) upMoves++;
+    else if (d < -0.01) downMoves++;
+    if (i >= 2) {
+      const d0 = recent[i - 1] - recent[i - 2];
+      if (d0 * d < 0 && Math.abs(d0) > 0.005 && Math.abs(d) > 0.005) flips++;
+    }
+  }
+  const net = recent[recent.length - 1] - recent[0];
+  const range = Math.max(...recent) - Math.min(...recent);
+
+  // 单向趋势：净漂移大且同向 tick 多、翻很少
+  if (Math.abs(net) >= TREND_MOVE && Math.min(upMoves, downMoves) <= 1 && flips <= 1) {
+    return "trend";
+  }
+  // 震荡：有翻折或区间来回
+  if (flips >= 1 || (range >= 0.05 && upMoves >= 1 && downMoves >= 1)) {
+    return "oscillate";
+  }
+  if (gap < GAP_SOFT) return "unclear";
+  return Math.abs(net) >= TREND_MOVE ? "trend" : "oscillate";
+}
+
+function meanReversionBias(upHist) {
+  // 涨越多 → 偏向 Down；跌越多 → 偏向 Up
+  if (upHist.length < 3) return 0; // 0=中性, >0 偏 Up, <0 偏 Down
+  const net = upHist[upHist.length - 1] - upHist[0];
+  if (net > 0.12) return -1; // 已大涨 → Down
+  if (net < -0.12) return 1;
+  if (net > 0.06) return -0.5;
+  if (net < -0.06) return 0.5;
+  return 0;
+}
+
+function clampSize(usd, bankroll, posNotional, maxLeg) {
+  const maxPos = bankroll * MAX_POS_FRAC;
+  const room = Math.max(0, maxPos - posNotional);
+  let s = Math.min(usd, maxLeg, room);
+  s = Math.floor(s * 100) / 100;
+  if (s > 0 && s < MIN_LEG) return 0; // 不做20%以下
+  return s;
+}
+
+function emit(obj) {
+  // 单行紧凑 JSON，便于 jsonl 解析
+  console.log(JSON.stringify(obj));
+}
+
+async function main() {
+  const args = parseArgs();
+  const env = loadEnv();
+  const wantLive = args.live === "true" || args.live === "1";
+  // 纪律：本策略 v1 永不实盘下单，即使 --live；仅标记意图
+  const doLive = false;
+  const liveFlag = wantLive && env.live; // 记录用户是否想 live，但仍 dry
+  const amountCap = Math.min(
+    env.maxOrderUsd,
+    Number(args.amount != null ? args.amount : Math.min(env.maxOrderUsd, MAX_LEG))
+  );
+  const bankrollArg = args.bankroll != null ? Number(args.bankroll) : BANKROLL0;
+  const nowMs = Date.now();
+  const nowSec = Math.floor(nowMs / 1000);
+
+  const slugs = args.slug
+    ? [args.slug]
+    : windowStarts().map((t) => `btc-updown-5m-${t}`);
+
+  let picked = null;
+  let tokens = null;
+  const scanned = [];
+  for (const slug of slugs) {
+    try {
+      const m = await gammaBySlug(slug);
+      if (!m) {
+        scanned.push({ slug, status: "miss" });
+        continue;
+      }
+      const end = Date.parse(m.endDate || m.end_date_iso || "") || 0;
+      const closed = m.closed === true || (end && end <= nowMs);
+      const t = parseTokens(m);
+      scanned.push({ slug, closed, end: m.endDate || m.end_date_iso, hasTokens: !!t });
+      if (closed || !t) continue;
+      const [upBook, downBook] = await Promise.all([bestBook(t.up), bestBook(t.down)]);
+      if (upBook.ask == null && downBook.ask == null) {
+        scanned[scanned.length - 1].thinBook = true;
+        continue;
+      }
+      picked = m;
+      tokens = t;
+      picked._books = { up: upBook, down: downBook };
+      break;
+    } catch (e) {
+      scanned.push({ slug, error: String(e.message || e) });
+    }
+  }
+
+  if (!picked) {
+    emit({
+      ok: false,
+      live: false,
+      action: "skip",
+      reason: "no_tradeable_btc5m",
+      scanned,
+    });
+    process.exit(2);
+  }
+
+  const upBook = picked._books.up;
+  const downBook = picked._books.down;
+  const upMid = mid(upBook.bid, upBook.ask);
+  const downMid = mid(downBook.bid, downBook.ask);
+  const endMs = Date.parse(picked.endDate || picked.end_date_iso || "") || 0;
+  const remainingSec = endMs ? Math.max(0, Math.floor((endMs - nowMs) / 1000)) : WINDOW_SEC;
+  // 窗口起点：slug 末尾时间戳或 end-300
+  let windowStart = null;
+  const mSlug = String(picked.slug || "").match(/btc-updown-5m-(\d+)/);
+  if (mSlug) windowStart = Number(mSlug[1]);
+  else if (endMs) windowStart = Math.floor(endMs / 1000) - WINDOW_SEC;
+  const elapsedSec = windowStart != null ? Math.max(0, nowSec - windowStart) : WINDOW_SEC - remainingSec;
+
+  const gap =
+    upMid != null && downMid != null ? Math.abs(upMid - downMid) : 0;
+  const favSide =
+    upMid != null && downMid != null
+      ? upMid >= downMid
+        ? "Up"
+        : "Down"
+      : upBook.ask != null && downBook.ask != null
+        ? upBook.ask <= downBook.ask
+          ? "Up"
+          : "Down"
+        : "Up";
+  const favMid = favSide === "Up" ? upMid : downMid;
+  const weakSide = favSide === "Up" ? "Down" : "Up";
+  const weakMid = weakSide === "Up" ? upMid : downMid;
+  const favAsk = favSide === "Up" ? upBook.ask : downBook.ask;
+  const weakAsk = weakSide === "Up" ? upBook.ask : downBook.ask;
+  const favBid = favSide === "Up" ? upBook.bid : downBook.bid;
+
+  // —— 状态 ——
+  let st = loadState();
+  if (!st || st.slug !== picked.slug) {
+    st = defaultState(picked.slug, bankrollArg);
+  }
+  if (st.bankroll == null) st.bankroll = bankrollArg;
+  st.tick = (st.tick || 0) + 1;
+  st.upMidHist = [...(st.upMidHist || []), upMid].filter((x) => x != null).slice(-20);
+  st.downMidHist = [...(st.downMidHist || []), downMid].filter((x) => x != null).slice(-20);
+  if (gap < GAP_UNCLEAR) st.unclearStreak = (st.unclearStreak || 0) + 1;
+  else st.unclearStreak = 0;
+
+  const regime = inferRegime(st.upMidHist, st.downMidHist, gap, remainingSec);
+  const mrBias = meanReversionBias(st.upMidHist);
+  const recentUps = st.upMidHist.slice(-6);
+  const midRange =
+    recentUps.length >= 2 ? Math.max(...recentUps) - Math.min(...recentUps) : 0.15;
+  const lowVol = midRange < LOW_RANGE;
+
+  const pos = st.position;
+  const posNotional = pos ? Number(pos.notional || 0) : 0;
+  const posSide = pos?.side || null;
+  const adds = pos?.adds || 0;
+
+  // 基础输出字段
+  const base = {
+    ok: true,
+    live: false,
+    liveWanted: !!liveFlag,
+    mode: "DRY_RUN_HUMAN",
+    window: picked.slug,
+    question: picked.question,
+    endDate: picked.endDate || picked.end_date_iso,
+    remainingSec,
+    elapsedSec,
+    up: { mid: upMid, ask: upBook.ask, bid: upBook.bid },
+    down: { mid: downMid, ask: downBook.ask, bid: downBook.bid },
+    gap: Number(gap.toFixed(4)),
+    favSide,
+    favMid,
+    regime,
+    bankroll: st.bankroll,
+    position: pos,
+    postOnly: true,
+    amountCapPerLeg: amountCap,
+    tick: st.tick,
+  };
+
+  function decide(action, extra = {}) {
+    const out = {
+      ...base,
+      action,
+      side: extra.side ?? null,
+      price: extra.price ?? null,
+      sizeUsd: extra.sizeUsd ?? 0,
+      reason: extra.reason ?? action,
+      hedgeX: extra.hedgeX ?? null,
+      mrBias,
+      lowVol,
+      ...extra.more,
+    };
+    // 更新 dry-run 持仓状态（模拟）
+    if (["buy_fav_limit", "add_at_80", "quote_50", "hedge", "cut_hedge"].includes(action) && out.sizeUsd > 0) {
+      const side = out.side;
+      const px = out.price || 0.5;
+      const usd = out.sizeUsd;
+      if (action === "cut_hedge" || (action === "hedge" && posSide && side !== posSide)) {
+        // 对冲减损：减少原仓名义
+        if (st.position) {
+          st.position.notional = Math.max(0, Number(st.position.notional) - usd);
+          if (st.position.notional < MIN_LEG) st.position = null;
+        }
+      } else if (action === "quote_50" || action === "buy_fav_limit" || action === "add_at_80" || action === "hedge") {
+        if (!st.position) {
+          st.position = { side, notional: usd, avgPrice: px, adds: 0, openedAt: nowSec };
+        } else if (st.position.side === side) {
+          const n0 = Number(st.position.notional);
+          const a0 = Number(st.position.avgPrice);
+          st.position.avgPrice = (a0 * n0 + px * usd) / (n0 + usd);
+          st.position.notional = n0 + usd;
+          if (action === "add_at_80") {
+            st.position.adds = (st.position.adds || 0) + 1;
+            st.lastAddAt = nowSec;
+          }
+        } else {
+          // 反向开仓视作对冲
+          st.position.notional = Math.max(0, Number(st.position.notional) - usd);
+          if (st.position.notional < MIN_LEG) {
+            st.position = { side, notional: usd, avgPrice: px, adds: 0, openedAt: nowSec };
+          }
+        }
+      }
+    }
+    if (action === "take_profit" && st.position) {
+      st.bankroll = Number((st.bankroll + (out.sizeUsd || st.position.notional) * 0.05).toFixed(2)); // 象征性标记
+      st.position = null;
+    }
+    st.lastAction = action;
+    saveState(st);
+    emit(out);
+  }
+
+  // ========== 决策树（硬规则优先）==========
+
+  // #4 1分钟内不操作
+  if (remainingSec <= LATE_SEC) {
+    return decide("skip", { reason: "late_no_trade_le60s" });
+  }
+
+  // #18 持仓早止盈
+  if (pos && posSide) {
+    const pMid = posSide === "Up" ? upMid : downMid;
+    if (pMid != null && pMid >= TAKE_PROFIT_MID) {
+      return decide("take_profit", {
+        side: posSide,
+        price: posSide === "Up" ? upBook.bid : downBook.bid,
+        sizeUsd: Math.min(posNotional, amountCap),
+        reason: "take_profit_mid_ge_0.90",
+      });
+    }
+  }
+
+  // #5 方向明显不对 → 对冲减损
+  if (pos && posSide) {
+    const pMid = posSide === "Up" ? upMid : downMid;
+    const oMid = posSide === "Up" ? downMid : upMid;
+    if (pMid != null && oMid != null && pMid < WRONG_SIDE_MID && oMid > OPP_STRONG) {
+      const hedgeUsd = clampSize(HEDGE_X * posNotional, st.bankroll, 0, amountCap);
+      if (hedgeUsd >= MIN_LEG) {
+        const opp = posSide === "Up" ? "Down" : "Up";
+        return decide("cut_hedge", {
+          side: opp,
+          price: opp === "Up" ? upBook.ask : downBook.ask,
+          sizeUsd: hedgeUsd,
+          hedgeX: HEDGE_X,
+          reason: "position_wrong_cut_hedge_x1",
+          more: { postOnly: false },
+        });
+      }
+    }
+  }
+
+  // #21 大趋势不操作
+  if (regime === "trend") {
+    return decide("skip", { reason: "trend_regime_skip_only_oscillate" });
+  }
+
+  // #7 持续不明朗
+  if (st.unclearStreak >= UNCLEAR_STREAK && gap < GAP_UNCLEAR) {
+    // #11 若还早，可挂50试
+    if (remainingSec > HEDGE_REMAIN_SEC && regime === "unclear") {
+      const sz = clampSize(lowVol ? amountCap * 0.5 : amountCap * 0.5, st.bankroll, posNotional, amountCap);
+      if (sz >= MIN_LEG && !pos) {
+        // 均值回归偏置选边
+        const side = mrBias > 0 ? "Up" : mrBias < 0 ? "Down" : favSide;
+        return decide("quote_50", {
+          side,
+          price: 0.5,
+          sizeUsd: sz,
+          reason: "unclear_quote_50_maker",
+        });
+      }
+    }
+    return decide("skip", { reason: "sustained_unclear_gap" });
+  }
+
+  // #12 最后2分钟且差距≤20%：需极高胜率
+  if (remainingSec <= HEDGE_REMAIN_SEC && gap <= GAP_LATE_EDGE) {
+    if (!(favMid >= FAV_HIGH_CONF)) {
+      // #1 ≤2min 不明朗 → 对冲（若已有仓或轻度敞口）
+      if (pos && gap < GAP_SOFT) {
+        const sz = clampSize(Math.min(amountCap, posNotional * HEDGE_X), st.bankroll, 0, amountCap);
+        if (sz >= MIN_LEG) {
+          return decide("hedge", {
+            side: weakSide,
+            price: weakAsk,
+            sizeUsd: sz,
+            hedgeX: HEDGE_X,
+            reason: "le2min_unclear_hedge",
+            more: { postOnly: false },
+          });
+        }
+      }
+      return decide("skip", { reason: "le2min_gap_le20_need_80pct" });
+    }
+  }
+
+  // #1 ≤2min 不明朗对冲（无高置信）
+  if (remainingSec <= HEDGE_REMAIN_SEC && gap < GAP_SOFT) {
+    if (pos) {
+      const sz = clampSize(Math.min(amountCap, posNotional || amountCap * 0.5), st.bankroll, 0, amountCap);
+      if (sz >= MIN_LEG) {
+        return decide("hedge", {
+          side: weakSide,
+          price: weakAsk,
+          sizeUsd: sz,
+          reason: "le2min_unclear_hedge_soft",
+          more: { postOnly: false },
+        });
+      }
+    }
+    return decide("skip", { reason: "le2min_unclear_no_pos_skip" });
+  }
+
+  // #3 前2分钟拉开≥40 → 80成本加码
+  if (
+    elapsedSec <= ADD80_ELAPSED &&
+    gap >= GAP_ADD40 &&
+    favMid != null &&
+    regime === "oscillate"
+  ) {
+    // #19 不要连续加单：已有仓同向且 adds>=1 → 禁止再加
+    if (pos && pos.side === favSide && adds >= 1) {
+      return decide("skip", { reason: "no_consecutive_add_already_added" });
+    }
+    if (pos && pos.side === favSide && st.lastAction === "add_at_80") {
+      return decide("skip", { reason: "no_consecutive_add" });
+    }
+    let sz = amountCap;
+    if (favMid >= FAV_BIG) sz = amountCap * (favMid >= 0.85 ? 1 : 2 / 3); // #10
+    if (lowVol) sz *= 0.5; // #16
+    // 均值回归：若偏置强烈反对 favorite，缩小
+    if ((favSide === "Up" && mrBias < -0.5) || (favSide === "Down" && mrBias > 0.5)) {
+      sz *= 0.5;
+    }
+    sz = clampSize(sz, st.bankroll, posNotional, amountCap);
+    if (sz >= MIN_LEG) {
+      const isAdd = !!(pos && pos.side === favSide);
+      return decide(isAdd ? "add_at_80" : "buy_fav_limit", {
+        side: favSide,
+        price: 0.8,
+        sizeUsd: sz,
+        reason: isAdd
+          ? "early_gap40_add_at_80"
+          : "early_gap40_open_target_80",
+      });
+    }
+  }
+
+  // #2 前3分钟绝对优势 → 抓价差做低单边成本
+  if (
+    elapsedSec <= EARLY_ADV_ELAPSED &&
+    regime === "oscillate" &&
+    ((favMid != null && favMid >= FAV_CLEAR) || gap >= GAP_CLEAR)
+  ) {
+    if (pos && pos.side === favSide && adds >= 1) {
+      return decide("skip", { reason: "have_position_no_more_add" });
+    }
+    // 已有同向仓且刚加过 → 跳过
+    if (pos && pos.side === favSide && st.lastAction === "add_at_80") {
+      return decide("skip", { reason: "no_consecutive_add" });
+    }
+    let sz = amountCap * 0.75;
+    if (favMid >= FAV_BIG) sz = amountCap * (2 / 3);
+    if (lowVol) sz *= 0.5;
+    if ((favSide === "Up" && mrBias < -0.5) || (favSide === "Down" && mrBias > 0.5)) {
+      sz *= 0.5;
+    }
+    sz = clampSize(sz, st.bankroll, posNotional, amountCap);
+    // 限价：用 bid 或略低于 ask 的 maker 价，降低成本
+    const limitPx =
+      favBid != null
+        ? favBid
+        : favAsk != null
+          ? Math.max(0.01, Math.round((favAsk - 0.02) * 100) / 100)
+          : 0.5;
+    if (sz >= MIN_LEG) {
+      const isAdd = !!(pos && pos.side === favSide);
+      // 首次用 buy_fav_limit；已有仓则只有在 gap≥40 路径才 add（此处不算 add 连续）
+      if (isAdd) {
+        return decide("skip", { reason: "already_in_fav_wait_gap40_or_tp" });
+      }
+      return decide("buy_fav_limit", {
+        side: favSide,
+        price: limitPx,
+        sizeUsd: sz,
+        reason: "early_clear_fav_maker_lower_cost",
+      });
+    }
+  }
+
+  // #11 不明朗且时间充裕 → 挂50
+  if (regime === "unclear" && remainingSec > HEDGE_REMAIN_SEC && !pos) {
+    const sz = clampSize(amountCap * (lowVol ? 0.4 : 0.5), st.bankroll, 0, amountCap);
+    if (sz >= MIN_LEG) {
+      const side = mrBias > 0 ? "Up" : mrBias < 0 ? "Down" : favSide;
+      return decide("quote_50", {
+        side,
+        price: 0.5,
+        sizeUsd: sz,
+        reason: "uncertain_quote_50",
+      });
+    }
+  }
+
+  // oscillate 中等优势：可轻仓试
+  if (
+    regime === "oscillate" &&
+    remainingSec > HEDGE_REMAIN_SEC &&
+    favMid != null &&
+    favMid >= 0.58 &&
+    gap >= 0.16 &&
+    !pos
+  ) {
+    let sz = amountCap * 0.5;
+    if (lowVol) sz *= 0.5;
+    sz = clampSize(sz, st.bankroll, 0, amountCap);
+    const limitPx =
+      favBid != null
+        ? favBid
+        : favAsk != null
+          ? Math.max(0.01, Math.round((favAsk - 0.01) * 100) / 100)
+          : 0.55;
+    if (sz >= MIN_LEG) {
+      return decide("buy_fav_limit", {
+        side: favSide,
+        price: limitPx,
+        sizeUsd: sz,
+        reason: "oscillate_mild_fav_probe",
+      });
+    }
+  }
+
+  return decide("skip", {
+    reason:
+      regime === "unclear"
+        ? "unclear_no_setup"
+        : lowVol
+          ? "low_vol_no_edge"
+          : "no_rule_matched",
+  });
+}
+
+main().catch((e) => {
+  emit({
+    ok: false,
+    live: false,
+    action: "skip",
+    reason: "error",
+    error: String(e?.message || e),
+  });
+  process.exit(1);
+});

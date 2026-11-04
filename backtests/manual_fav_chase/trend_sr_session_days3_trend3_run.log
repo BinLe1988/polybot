@@ -1,0 +1,22 @@
+[filters] trend_n=3 enabled=True sr1000=True (--trend6 is alias; lookback is 3)
+[range] inclusive SH days 2026-10-31→2026-11-02 epochs=[1793376000,1793635200) = 2026-10-31 00:00:00 Asia/Shanghai → 2026-11-03 00:00:00 Asia/Shanghai
+[session] activity=/Users/nick/poly-test/logs/manual_activity_days3_20261031_1102.json
+[session] fills=140 roundtrips=139 closed=54 closed_pnl=32.9057
+[klines] fetching Binance 5m 2026-10-30 23:35:00 Asia/Shanghai → 2026-11-03 00:00:00 Asia/Shanghai
+[klines] n_bars=871
+Wrote /Users/nick/poly-test/backtests/manual_fav_chase/trend_sr_session_20261031_20261102_summary.json
+Wrote /Users/nick/poly-test/backtests/manual_fav_chase/trend_sr_session_20261031_20261102_trades.csv
+
+======== fav_chase trend+SR (session_A_fill_tape) ========
+range: 2026-10-31 00:00:00 Asia/Shanghai → 2026-11-03 00:00:00 Asia/Shanghai
+filters: trend6=True sr1000=True klines=871
+R1 BASELINE: n=3 WR=1.0 pnl_actual=$0.8349 pnl5=$4.1242
+R1 FILTERED: n=0 WR=None pnl_actual=$0 pnl5=$0
+R1 blocked: total=13 trend6=13 sr_false=0
+R2 BASELINE: n=3 WR=1.0 pnl_actual=$1.0161 pnl5=$2.0498
+R2 FILTERED: n=0 WR=None pnl_actual=$0 pnl5=$0
+R2 blocked: total=7 trend6=7 sr_false=0
+trend3 def: Relative to current 5m market window start ws: take Binance BTCUSDT 5m closes for bar opens [ws-1200, ws-900, ws-600, ws-300] (4 closes). Co ...
+sr1000 def: Round levels every 1000 USD. Probe last 4 completed 5m bars. Near-level band ±150.0. Pierce beyond level by ≥20.0. FALSE ...
+================================================
+

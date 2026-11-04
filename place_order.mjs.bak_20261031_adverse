@@ -1,0 +1,661 @@
+#!/usr/bin/env node
+/**
+ * Limited live order helper — POLY_1271 OWNER (Magic / deposit-wallet) path.
+ *
+ * Default live path (no MetaMask SESSION_KEY, no POLY_PROXY, no 0x0c8fa fallback):
+ *   createSecureClient({ signer: Magic EOA, wallet: POLYMARKET_FUNDER_ADDRESS })
+ *   → signerType=OWNER, walletType=DEPOSIT_WALLET (3), funder=0xD18b…
+ *   placeMarketOrder via @polymarket/client (ERC-7739 nested / V2).
+ *
+ * Env:
+ *   POLYMARKET_PRIVATE_KEY     — Magic owner EOA (must derive to proxy owner)
+ *   POLYMARKET_FUNDER_ADDRESS  — proxy / deposit wallet holding pUSD (0xD18b…)
+ *   POLYMARKET_SIGNATURE_TYPE  — 3 / POLY_1271 (informational; SecureClient owns type)
+ *   POLYMARKET_MAX_ORDER_USD   — hard cap per order
+ *
+ * Usage:
+ *   node place_order.mjs --slug btc-updown-5m-<ts> --outcome up|down --side BUY|SELL --amount 2
+ *   node place_order.mjs ... --max-price 0.42   # BUY hard cap (preferred); --price also used as BUY cap
+ *   node place_order.mjs ... --decision-ask 0.40 # logged; DAXUE decision ask
+ *   node place_order.mjs ... --dry
+ *   node place_order.mjs ... --sign-only
+ *
+ * BUY path: placeMarketOrder with maxPrice when --max-price/--price given (FOK),
+ * so fills cannot exceed the decision ask (+ slip). Without maxPrice, legacy uncapped market buy.
+ *
+ * Exit 0 only if response.ok (or --dry / --sign-only succeeded). Prints JSON.
+ * Never prints private keys or API secrets.
+ */
+import { Wallet } from "@ethersproject/wallet";
+import {
+  createPublicClient,
+  createSecureClient,
+  OrderSide,
+  OrderType,
+} from "@polymarket/client";
+import { ClobClient, Chain, AssetType } from "@polymarket/clob-client-v2";
+import { loadEnv, parseArgs } from "./lib_env.mjs";
+
+const SIG_NAMES = {
+  0: "EOA",
+  1: "POLY_PROXY",
+  2: "POLY_GNOSIS_SAFE",
+  3: "POLY_1271",
+};
+
+const WALLET_TYPE_NAMES = {
+  0: "EOA",
+  1: "POLY_PROXY",
+  2: "GNOSIS_SAFE",
+  3: "DEPOSIT_WALLET",
+};
+
+// Known MetaMask CREATE2 deposit for the OLD EOA — never use as live funder here.
+const FORBIDDEN_FALLBACK_DEPOSIT =
+  "0x0c8fa514c5325c2e6dcee222fa5e455de541e42b";
+
+function maskAddr(a) {
+  const s = String(a || "");
+  if (s.length < 10) return s ? "***" : "";
+  return `${s.slice(0, 6)}…${s.slice(-4)}`;
+}
+
+function sameAddr(a, b) {
+  return String(a || "").toLowerCase() === String(b || "").toLowerCase();
+}
+
+function assetIdForOutcome(market, names) {
+  const entries = Object.entries(market.outcomes || {});
+  for (const want of names) {
+    for (const [k, v] of entries) {
+      if (String(k).toLowerCase() === want.toLowerCase()) {
+        return market.version === "v2" ? v.positionId : v.tokenId;
+      }
+    }
+  }
+  for (const [, v] of entries) {
+    const n = String(v?.name || v?.label || "").toLowerCase();
+    if (names.some((w) => n === w.toLowerCase())) {
+      return market.version === "v2" ? v.positionId : v.tokenId;
+    }
+  }
+  return null;
+}
+
+function outcomeNames(outcome) {
+  const o = String(outcome || "").toLowerCase();
+  if (o === "up" || o === "yes") return ["Up", "yes", "UP", "Yes"];
+  if (o === "down" || o === "no") return ["Down", "no", "DOWN", "No"];
+  return null;
+}
+
+function stripTypes(types) {
+  const o = { ...(types || {}) };
+  delete o.EIP712Domain;
+  return o;
+}
+
+function ethersSignerAdapter(wallet) {
+  return {
+    async getAddress() {
+      return wallet.getAddress();
+    },
+    async signTypedData(...args) {
+      if (args.length === 1 && args[0]?.domain) {
+        const p = args[0];
+        return wallet._signTypedData(
+          p.domain,
+          stripTypes(p.types || {}),
+          p.message ?? p.value
+        );
+      }
+      const [domain, types, value] = args;
+      return wallet._signTypedData(domain, stripTypes(types || {}), value);
+    },
+    async signMessage(msg) {
+      return wallet.signMessage(
+        typeof msg === "string" ? msg : msg?.raw ?? msg
+      );
+    },
+  };
+}
+
+function isMakerDepositReject(errText) {
+  const t = String(errText || "").toLowerCase();
+  return (
+    t.includes("maker address not allowed") ||
+    t.includes("deposit wallet flow")
+  );
+}
+
+function summarizeSigned(order) {
+  if (!order || typeof order !== "object") return { present: false };
+  const o = order.order && typeof order.order === "object" ? order.order : order;
+  return {
+    present: true,
+    keys: Object.keys(order),
+    maker: o.maker,
+    signer: o.signer,
+    signatureType: o.signatureType ?? order.signatureType,
+    hasTimestamp: "timestamp" in o || "timestamp" in order,
+    hasMetadata: "metadata" in o || "metadata" in order,
+    hasBuilder: "builder" in o || "builder" in order,
+    signaturePrefix:
+      String(o.signature || order.signature || "").slice(0, 10) || undefined,
+  };
+}
+
+
+function fillPxFromResponse(response, sideStr) {
+  const taking = Number(response?.takingAmount ?? response?.taking_amount);
+  const making = Number(response?.makingAmount ?? response?.making_amount);
+  if (!(taking > 0) || !(making > 0)) return null;
+  // BUY: collateral (making) / shares (taking); SELL: collateral (taking) / shares (making)
+  if (String(sideStr).toUpperCase() === "SELL") return making > 0 ? taking / making : null;
+  return taking > 0 ? making / taking : null;
+}
+
+function roundPx(x, n = 6) {
+  const v = Number(x);
+  if (!Number.isFinite(v)) return null;
+  return Math.round(v * 10 ** n) / 10 ** n;
+}
+
+function responseOk(response, errText) {
+  const versionReject = /invalid order version|order version/i.test(
+    errText || ""
+  );
+  if (!response || versionReject) return { ok: false, versionReject };
+  const ok =
+    response.success === true ||
+    response.ok === true ||
+    response.status === "matched" ||
+    response.status === "live" ||
+    response.status === "Live" ||
+    Boolean(response.orderID || response.orderId || response.id);
+  return { ok: Boolean(ok), versionReject: false };
+}
+
+async function probeClobBalance(signerWallet, funder) {
+  try {
+    const host = "https://clob.polymarket.com";
+    const l1 = new ClobClient({
+      host,
+      chain: Chain.POLYGON,
+      signer: signerWallet,
+      signatureType: 3,
+      funderAddress: funder,
+    });
+    const creds = await l1.createOrDeriveApiKey();
+    const client = new ClobClient({
+      host,
+      chain: Chain.POLYGON,
+      signer: signerWallet,
+      creds,
+      signatureType: 3,
+      funderAddress: funder,
+    });
+    try {
+      await client.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL });
+    } catch (_) {}
+    return await client.getBalanceAllowance({
+      asset_type: AssetType.COLLATERAL,
+    });
+  } catch (e) {
+    return { error: String(e?.message || e).slice(0, 160) };
+  }
+}
+
+async function buildOwnerClient(cfg) {
+  const funderAddress =
+    process.env.POLYMARKET_FUNDER_ADDRESS ||
+    process.env.POLYMARKET_WALLET_ADDRESS ||
+    cfg.funder ||
+    cfg.wallet;
+  if (!funderAddress) throw new Error("missing_funder");
+
+  const depositEnv =
+    process.env.POLYMARKET_DEPOSIT_ADDRESS || cfg.depositAddress || "";
+  // Soft warn only if someone points funder at the EIP-7702 session deposit env;
+  // hard-refuse the known MetaMask CREATE2 fallback wallet.
+  if (sameAddr(funderAddress, FORBIDDEN_FALLBACK_DEPOSIT)) {
+    throw new Error(
+      `funder_forbidden_metamask_deposit:${maskAddr(funderAddress)}`
+    );
+  }
+
+  const signerWallet = new Wallet(cfg.privateKey);
+  const signerAddr = await signerWallet.getAddress();
+  const ethSigner = ethersSignerAdapter(signerWallet);
+
+  const client = await createSecureClient({
+    signer: ethSigner,
+    wallet: funderAddress,
+  });
+  const acct = client.account || {};
+
+  if (String(acct.signerType || "").toUpperCase() !== "OWNER") {
+    throw new Error(
+      `signerType_unexpected:${acct.signerType} (need OWNER for Magic proxy; got SESSION_KEY?)`
+    );
+  }
+  if (!sameAddr(acct.wallet, funderAddress)) {
+    throw new Error(
+      `wallet_mismatch:resolved=${maskAddr(acct.wallet)} expected=${maskAddr(
+        funderAddress
+      )}`
+    );
+  }
+  if (sameAddr(acct.wallet, FORBIDDEN_FALLBACK_DEPOSIT)) {
+    throw new Error("resolved_wallet_is_forbidden_metamask_deposit");
+  }
+
+  const balance = await probeClobBalance(signerWallet, funderAddress);
+
+  return {
+    client,
+    signerWallet,
+    signerAddr,
+    funder: acct.wallet || funderAddress,
+    signatureType: 3,
+    signatureTypeName: "POLY_1271",
+    walletType: WALLET_TYPE_NAMES[acct.walletType] || String(acct.walletType),
+    signerType: acct.signerType || "OWNER",
+    orderVersion: 2,
+    clientPackage: "@polymarket/client",
+    path: "secure-client-poly1271-owner",
+    orderPath: "owner1271",
+    fallbackUsed: false,
+    balance,
+    depositEnvIgnored: depositEnv ? maskAddr(depositEnv) : undefined,
+  };
+}
+
+const args = parseArgs();
+const cfg = loadEnv();
+const MAX = Number(
+  process.env.POLYMARKET_MAX_ORDER_USD || cfg.maxOrderUsd || 10
+);
+const dry =
+  args.dry === "true" || args.dry === "1" || args.help === "true" || args.help === "1";
+const signOnly = args["sign-only"] === "true" || args["sign-only"] === "1";
+
+if (args.help === "true" || args.help === "1") {
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        help: true,
+        usage:
+          "node place_order.mjs --slug btc-updown-5m-<ts> --outcome up|down --side BUY|SELL --amount <usd> [--max-price P|--price P] [--decision-ask A] [--shares N] [--dry|--sign-only]",
+        caps: { POLYMARKET_MAX_ORDER_USD: MAX },
+        path: "secure-client POLY_1271 OWNER (Magic)",
+        buyCap:
+          "BUY: --max-price (or --price) passed as placeMarketOrder maxPrice FOK; refuses if estimate > cap",
+      },
+      null,
+      2
+    )
+  );
+  process.exit(0);
+}
+
+const amount = Number(args.amount || "1");
+if (!(amount > 0) || amount > MAX) {
+  console.error(
+    JSON.stringify({
+      ok: false,
+      error: "amount_cap",
+      amount,
+      max: MAX,
+      message: `amount must be in (0, ${MAX}]`,
+    })
+  );
+  process.exit(1);
+}
+
+const sideStr = (args.side || "BUY").toUpperCase();
+const outcome = (args.outcome || "").toLowerCase();
+const names = outcome ? outcomeNames(outcome) : null;
+
+if (outcome && !names) {
+  console.error(
+    JSON.stringify({
+      ok: false,
+      error: "bad_outcome",
+      outcome,
+      message: "outcome must be up|down (or yes|no)",
+    })
+  );
+  process.exit(1);
+}
+
+try {
+  const built = await buildOwnerClient(cfg);
+  const diag = {
+    signer: maskAddr(built.signerAddr),
+    signerFull: built.signerAddr,
+    funder: maskAddr(built.funder),
+    funderFull: built.funder,
+    signatureType: built.signatureType,
+    signatureTypeName: built.signatureTypeName,
+    walletType: built.walletType,
+    signerType: built.signerType,
+    path: built.path,
+    clientPackage: built.clientPackage,
+    orderVersion: built.orderVersion,
+    orderPath: built.orderPath,
+    fallbackUsed: false,
+    clobCollateralBalance: built.balance?.balance ?? built.balance,
+  };
+
+  const pub = createPublicClient();
+  let market;
+  if (args.slug) market = await pub.fetchMarket({ slug: args.slug });
+  else
+    market = (await pub.listMarkets({ closed: false, pageSize: 10 }).firstPage())
+      .items[0];
+
+  let assetId;
+  if (names) {
+    assetId = assetIdForOutcome(market, names);
+    if (!assetId) {
+      console.log(
+        JSON.stringify(
+          {
+            ok: false,
+            error: "missing_asset_id",
+            slug: market?.slug,
+            outcome,
+            outcomeKeys: Object.keys(market?.outcomes || {}),
+            ...diag,
+          },
+          null,
+          2
+        )
+      );
+      process.exit(1);
+    }
+  } else {
+    const yes = market.outcomes.yes || market.outcomes.Up || market.outcomes.up;
+    if (!yes) assetId = assetIdForOutcome(market, ["Up", "yes"]);
+    else assetId = market.version === "v2" ? yes.positionId : yes.tokenId;
+  }
+
+  let shares = args.shares != null ? Number(args.shares) : null;
+  const priceHint = args.price != null ? Number(args.price) : null;
+  const decisionAsk =
+    args["decision-ask"] != null ? Number(args["decision-ask"]) : null;
+  const maxPriceArg =
+    args["max-price"] != null ? Number(args["max-price"]) : null;
+  // BUY hard cap: --max-price preferred; else --price (DAXUE passes decision ask / ask+slip).
+  // SELL still uses --price only to derive shares when --shares omitted.
+  let buyMaxPrice = null;
+  if (sideStr === "BUY") {
+    if (Number.isFinite(maxPriceArg) && maxPriceArg > 0 && maxPriceArg < 1) {
+      buyMaxPrice = maxPriceArg;
+    } else if (Number.isFinite(priceHint) && priceHint > 0 && priceHint < 1) {
+      buyMaxPrice = priceHint;
+    }
+  }
+  if (sideStr === "SELL") {
+    if (!(shares > 0) && priceHint > 0 && amount > 0) {
+      shares = Math.floor((amount / priceHint) * 10000) / 10000;
+    }
+    if (!(shares > 0)) {
+      console.error(
+        JSON.stringify({
+          ok: false,
+          error: "sell_needs_shares",
+          message: "SELL requires --shares N (or --amount + --price to derive)",
+          ...diag,
+        })
+      );
+      process.exit(1);
+    }
+  }
+
+  const tokenId = String(assetId);
+  const side =
+    sideStr === "SELL" ? OrderSide.SELL || "SELL" : OrderSide.BUY || "BUY";
+
+  function buildMarketOrderRequest() {
+    const req = {
+      tokenId,
+      side,
+      amount: sideStr === "SELL" ? Number(shares) : Number(amount),
+    };
+    if (sideStr === "BUY" && buyMaxPrice != null) {
+      req.maxPrice = Number(buyMaxPrice);
+      req.orderType = OrderType.FOK || "FOK";
+    } else if (sideStr === "SELL" && Number.isFinite(priceHint) && priceHint > 0) {
+      // optional floor for sells when price provided (non-breaking)
+      req.minPrice = Number(priceHint);
+      req.orderType = OrderType.FOK || "FOK";
+    }
+    return req;
+  }
+
+  if (dry) {
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          dry: true,
+          market: market.slug,
+          marketVersion: market.version,
+          outcome: outcome || "default_yes",
+          side: sideStr,
+          amount: sideStr === "BUY" ? amount : undefined,
+          shares: sideStr === "SELL" ? shares : undefined,
+          decisionAsk: Number.isFinite(decisionAsk) ? decisionAsk : undefined,
+          maxPrice: buyMaxPrice != null ? buyMaxPrice : undefined,
+          priceCapMode:
+            sideStr === "BUY" && buyMaxPrice != null
+              ? "market_buy_maxPrice_FOK"
+              : sideStr === "BUY"
+                ? "market_buy_uncapped_legacy"
+                : "market_sell",
+          max: MAX,
+          assetId: String(assetId).slice(0, 12) + "…",
+          outcomeKeys: Object.keys(market.outcomes || {}),
+          action: "would_place",
+          orderRequest: buildMarketOrderRequest(),
+          ...diag,
+        },
+        null,
+        2
+      )
+    );
+    process.exit(0);
+  }
+
+  // Preflight: if BUY has a hard cap, refuse when estimated cross > cap (book moved).
+  let estimatePx = null;
+  if (sideStr === "BUY" && buyMaxPrice != null) {
+    try {
+      if (typeof built.client.estimateMarketPrice === "function") {
+        estimatePx = await built.client.estimateMarketPrice({
+          tokenId,
+          side,
+          amount: Number(amount),
+          orderType: OrderType.FOK || "FOK",
+        });
+      }
+    } catch (e) {
+      // Insufficient liquidity / estimate failure → refuse rather than uncapped buy
+      const em = String(e?.message || e).slice(0, 200);
+      console.log(
+        JSON.stringify(
+          {
+            ok: false,
+            error: "estimate_or_liquidity_fail",
+            message: em,
+            decisionAsk: Number.isFinite(decisionAsk) ? decisionAsk : undefined,
+            maxPrice: buyMaxPrice,
+            priceCapMode: "market_buy_maxPrice_FOK",
+            ...diag,
+          },
+          null,
+          2
+        )
+      );
+      process.exit(1);
+    }
+    if (
+      estimatePx != null &&
+      Number.isFinite(Number(estimatePx)) &&
+      Number(estimatePx) > Number(buyMaxPrice) + 1e-9
+    ) {
+      console.log(
+        JSON.stringify(
+          {
+            ok: false,
+            error: "ask_above_max_price",
+            message: `estimated fill ${estimatePx} > maxPrice ${buyMaxPrice}; refusing BUY`,
+            estimatePx: Number(estimatePx),
+            decisionAsk: Number.isFinite(decisionAsk) ? decisionAsk : undefined,
+            maxPrice: buyMaxPrice,
+            priceCapMode: "market_buy_maxPrice_FOK",
+            ...diag,
+          },
+          null,
+          2
+        )
+      );
+      process.exit(1);
+    }
+  }
+
+  if (signOnly) {
+    if (typeof built.client.createMarketOrder !== "function") {
+      console.log(
+        JSON.stringify({
+          ok: false,
+          signOnly: true,
+          error: "createMarketOrder_unavailable",
+          ...diag,
+        })
+      );
+      process.exit(1);
+    }
+    const signed = await built.client.createMarketOrder(buildMarketOrderRequest());
+    const summary = summarizeSigned(signed);
+    console.log(
+      JSON.stringify(
+        {
+          ok: summary.present,
+          signOnly: true,
+          market: market.slug,
+          marketVersion: market.version,
+          outcome: outcome || "default_yes",
+          side: sideStr,
+          amount: sideStr === "BUY" ? amount : undefined,
+          shares: sideStr === "SELL" ? shares : undefined,
+          decisionAsk: Number.isFinite(decisionAsk) ? decisionAsk : undefined,
+          maxPrice: buyMaxPrice != null ? buyMaxPrice : undefined,
+          priceCapMode:
+            sideStr === "BUY" && buyMaxPrice != null
+              ? "market_buy_maxPrice_FOK"
+              : "market_buy_uncapped_legacy",
+          signedOrder: summary,
+          ...diag,
+        },
+        null,
+        2
+      )
+    );
+    process.exit(summary.present ? 0 : 1);
+  }
+
+  let response = null;
+  let caught = null;
+  try {
+    response = await built.client.placeMarketOrder(buildMarketOrderRequest());
+  } catch (e) {
+    caught = e;
+    response = {
+      error: String(e?.message || e),
+      status: e?.response?.status,
+    };
+  }
+
+  const errText = String(
+    response?.error ||
+      response?.errorMsg ||
+      response?.message ||
+      (caught && caught.message) ||
+      ""
+  );
+  const { ok, versionReject } = responseOk(response, errText);
+  const makerDepositReject = isMakerDepositReject(errText);
+  const fillPx = roundPx(fillPxFromResponse(response, sideStr));
+  const badFill =
+    sideStr === "BUY" &&
+    buyMaxPrice != null &&
+    fillPx != null &&
+    fillPx > Number(buyMaxPrice) + 0.03;
+
+  console.log(
+    JSON.stringify(
+      {
+        ok: Boolean(ok) && !badFill,
+        market: market.slug,
+        outcome: outcome || "default_yes",
+        side: sideStr,
+        amount: sideStr === "BUY" ? amount : undefined,
+        shares: sideStr === "SELL" ? shares : undefined,
+        decisionAsk: Number.isFinite(decisionAsk) ? decisionAsk : undefined,
+        maxPrice: buyMaxPrice != null ? buyMaxPrice : undefined,
+        estimatePx: estimatePx != null ? Number(estimatePx) : undefined,
+        fill_px: fillPx,
+        badFill: Boolean(badFill),
+        priceCapMode:
+          sideStr === "BUY" && buyMaxPrice != null
+            ? "market_buy_maxPrice_FOK"
+            : sideStr === "BUY"
+              ? "market_buy_uncapped_legacy"
+              : "market_sell",
+        signatureType: diag.signatureType,
+        signatureTypeName: diag.signatureTypeName,
+        walletType: diag.walletType,
+        signerType: diag.signerType,
+        funder: diag.funder,
+        funderFull: diag.funderFull,
+        signer: diag.signer,
+        signerFull: diag.signerFull,
+        path: diag.path,
+        orderPath: diag.orderPath,
+        fallbackUsed: false,
+        clientPackage: diag.clientPackage,
+        orderVersion: diag.orderVersion,
+        clobCollateralBalance: diag.clobCollateralBalance,
+        versionReject,
+        makerDepositReject,
+        response,
+        ...(badFill
+          ? {
+              error: "bad_fill_above_max_price",
+              message: `fill_px ${fillPx} >> maxPrice ${buyMaxPrice}`,
+            }
+          : {}),
+      },
+      null,
+      2
+    )
+  );
+  if (!ok || badFill) process.exit(1);
+} catch (e) {
+  const msg = String(e?.message || e);
+  console.error(
+    JSON.stringify({
+      ok: false,
+      error: msg,
+      orderPath: "owner1271",
+      fallbackUsed: false,
+      versionReject: /invalid order version/i.test(msg),
+      makerDepositReject: isMakerDepositReject(msg),
+    })
+  );
+  process.exit(1);
+}

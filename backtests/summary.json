@@ -1,0 +1,193 @@
+{
+  "generated_at_asia_shanghai": "2026-10-20T10:32:40.707584+08:00",
+  "paper_only": true,
+  "max_notional_usd": 10.0,
+  "fee_model": "taker fee = shares * 0.07 * p * (1-p)",
+  "sample": {
+    "n_markets": 200,
+    "n_with_entry_mids": 200,
+    "window_ts_min": 1792402800,
+    "window_ts_max": 1792462500,
+    "range_asia_shanghai": [
+      "2026-10-19 17:40:00 Asia/Shanghai",
+      "2026-10-20 10:15:00 Asia/Shanghai"
+    ],
+    "up_wins": 94,
+    "down_wins": 106
+  },
+  "directional": {
+    "naive_momentum": {
+      "strategy": "naive_momentum",
+      "trades": 143,
+      "wins": 101,
+      "win_rate": 0.7062937062937062,
+      "net_pnl": 128.1280731248281,
+      "gross_pnl": 164.32978811445327,
+      "total_fees": 36.20171498962514,
+      "max_drawdown": 34.037041555245,
+      "avg_pnl_net": 0.8960005113624342,
+      "total_notional": 1393.7982850103756
+    },
+    "fade_favorite": {
+      "strategy": "fade_favorite",
+      "trades": 130,
+      "wins": 39,
+      "win_rate": 0.3,
+      "net_pnl": -292.32344799407974,
+      "gross_pnl": -236.97524089134942,
+      "total_fees": 55.34820710273059,
+      "max_drawdown": 332.5264025778832,
+      "avg_pnl_net": -2.248641907646767,
+      "total_notional": 1244.6517928972698
+    },
+    "always_up": {
+      "strategy": "always_up",
+      "trades": 200,
+      "wins": 94,
+      "win_rate": 0.47,
+      "net_pnl": -206.140112842713,
+      "gross_pnl": -136.83133560595596,
+      "total_fees": 69.30877723675708,
+      "max_drawdown": 267.2880189239243,
+      "avg_pnl_net": -1.030700564213565,
+      "total_notional": 1930.6912227632422
+    },
+    "always_down": {
+      "strategy": "always_down",
+      "trades": 200,
+      "wins": 106,
+      "win_rate": 0.53,
+      "net_pnl": -71.12685263814053,
+      "gross_pnl": -5.54403257154677,
+      "total_fees": 65.58282006659373,
+      "max_drawdown": 151.9237366245291,
+      "avg_pnl_net": -0.3556342631907027,
+      "total_notional": 1934.4171799334067
+    }
+  },
+  "arb": {
+    "arb_entry_mid_buf0.02": {
+      "strategy": "arb_entry_mid_buf0.02",
+      "opportunities": 20,
+      "opportunity_rate": 0.1,
+      "avg_edge_gross": 0.06800000000000003,
+      "avg_edge_net": 0.03555010000000003,
+      "avg_sum_px": 0.932,
+      "net_pnl": 7.992365218006008,
+      "gross_pnl": 14.95398148438879,
+      "total_fees": 6.961616266382781,
+      "max_drawdown": 0.07242268041237043,
+      "n_markets": 200
+    },
+    "arb_min_mid_buf0.02": {
+      "strategy": "arb_min_mid_buf0.02",
+      "opportunities": 56,
+      "opportunity_rate": 0.28,
+      "avg_edge_gross": 0.06124107142857143,
+      "avg_edge_net": 0.028090219402287075,
+      "avg_sum_px": 0.9387589285714286,
+      "net_pnl": 17.556235294004306,
+      "gross_pnl": 37.34452937440355,
+      "total_fees": 19.788294080399254,
+      "max_drawdown": 0.0946616185897442,
+      "n_markets": 200
+    },
+    "arb_min_ask_hs_buf0.02": {
+      "strategy": "arb_min_ask_hs_buf0.02",
+      "opportunities": 44,
+      "opportunity_rate": 0.22,
+      "avg_edge_gross": 0.059874999999999984,
+      "avg_edge_net": 0.02685799615140262,
+      "avg_sum_px": 0.9401250000000001,
+      "net_pnl": 13.170983501247157,
+      "gross_pnl": 28.63396156161899,
+      "total_fees": 15.462978060371839,
+      "max_drawdown": 0.2909521957219745,
+      "n_markets": 200
+    },
+    "arb_min_ask_tick_buf0.02": {
+      "strategy": "arb_min_ask_tick_buf0.02",
+      "opportunities": 34,
+      "opportunity_rate": 0.17,
+      "avg_edge_gross": 0.05985294117647061,
+      "avg_edge_net": 0.026662116804150288,
+      "avg_sum_px": 0.9401470588235293,
+      "net_pnl": 10.060165727692263,
+      "gross_pnl": 22.065840649021705,
+      "total_fees": 12.005674921329446,
+      "max_drawdown": 0.13075639552282947,
+      "n_markets": 200
+    },
+    "arb_entry_mid_buf0.01": {
+      "strategy": "arb_entry_mid_buf0.01",
+      "opportunities": 27,
+      "opportunity_rate": 0.135,
+      "avg_edge_gross": 0.05518518518518521,
+      "avg_edge_net": 0.022770000000000026,
+      "avg_sum_px": 0.9448148148148147,
+      "net_pnl": 7.012097710495388,
+      "gross_pnl": 16.278958175572875,
+      "total_fees": 9.266860465077487,
+      "max_drawdown": 0.34858270838295,
+      "n_markets": 200
+    },
+    "arb_min_mid_buf0.01": {
+      "strategy": "arb_min_mid_buf0.01",
+      "opportunities": 89,
+      "opportunity_rate": 0.445,
+      "avg_edge_gross": 0.04544382022471914,
+      "avg_edge_net": 0.01224022570499666,
+      "avg_sum_px": 0.9545561797752806,
+      "net_pnl": 12.630814352760165,
+      "gross_pnl": 43.614616550944675,
+      "total_fees": 30.98380219818451,
+      "max_drawdown": 0.6938156366398811,
+      "n_markets": 200
+    },
+    "arb_min_ask_hs_buf0.01": {
+      "strategy": "arb_min_ask_hs_buf0.01",
+      "opportunities": 56,
+      "opportunity_rate": 0.28,
+      "avg_edge_gross": 0.051241071428571434,
+      "avg_edge_net": 0.01805194255061086,
+      "avg_sum_px": 0.9487589285714284,
+      "net_pnl": 11.428683838222192,
+      "gross_pnl": 31.031143784762044,
+      "total_fees": 19.602459946539856,
+      "max_drawdown": 0.5645526817459086,
+      "n_markets": 200
+    },
+    "arb_min_ask_tick_buf0.01": {
+      "strategy": "arb_min_ask_tick_buf0.01",
+      "opportunities": 42,
+      "opportunity_rate": 0.21,
+      "avg_edge_gross": 0.051773809523809555,
+      "avg_edge_net": 0.01861716083861579,
+      "avg_sum_px": 0.9482261904761904,
+      "net_pnl": 8.793358509118477,
+      "gross_pnl": 23.486623931969266,
+      "total_fees": 14.693265422850793,
+      "max_drawdown": 0.6932678603790245,
+      "n_markets": 200
+    }
+  },
+  "assumptions": [
+    "No live orders",
+    "Entry mid ~15s after window open from prices-history fidelity=1",
+    "Arb asks approximated (no historical L2)",
+    "Fillability: both sides up to $10 total notional",
+    "Profits not guaranteed"
+  ],
+  "recommendation": {
+    "default": "stay_paper",
+    "best_directional_paper": "naive_momentum",
+    "best_arb_paper": "arb_min_mid_buf0.02",
+    "tiny_live_trial_candidate": "naive_momentum_or_live_gated_arb_only_with_hard_10usd_cap",
+    "do_not_live": [
+      "fade_favorite",
+      "always_up",
+      "always_down"
+    ],
+    "profits_guaranteed": false
+  }
+}

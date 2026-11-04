@@ -1,0 +1,30 @@
+[session] activity=/Users/nick/poly-test/logs/manual_activity_week_20261027_1103.json
+[session] fills=271 roundtrips=267 closed=82 closed_pnl=56.7014
+Wrote /Users/nick/poly-test/backtests/manual_fav_chase/session_week_20261027_1103_summary.json
+Wrote /Users/nick/poly-test/backtests/manual_fav_chase/session_week_20261027_1103_trades.csv
+
+======== manual_fav_chase session replay ========
+session: week_20261027_1103
+tape closed: n=82 pnl=$56.7014
+R3 skip (buy<=0.40 closed): n=27 pnl=$11.897 wr=0.5185
+R1: scored=15 skipped=21 WR=1.0 pnl_actual=$12.4723 pnl_size5=$16.2749 avg_px=0.8068 avg_rem=185.7
+  by_rem: {'120-180': {'n': 8, 'pnl': 6.0462, 'wr': 1.0, 'avg_buy_px': 0.8112}, '180-240': {'n': 7, 'pnl': 6.4262, 'wr': 1.0, 'avg_buy_px': 0.8017}}
+  by_px: {'0.80+': {'n': 9, 'pnl': 6.1713, 'wr': 1.0, 'avg_buy_px': 0.8502}, '0.60-0.80': {'n': 6, 'pnl': 6.3011, 'wr': 1.0, 'avg_buy_px': 0.7417}}
+R2: scored=11 skipped=12 WR=1.0 pnl_actual=$6.995 pnl_size5=$7.9694 avg_px=0.8565 avg_rem=173.1
+  by_rem: {'120-180': {'n': 5, 'pnl': 3.0923, 'wr': 1.0, 'avg_buy_px': 0.85}, '>240': {'n': 1, 'pnl': 0.1843, 'wr': 1.0, 'avg_buy_px': 0.9}, '60-120': {'n': 1, 'pnl': 0.6394, 'wr': 1.0, 'avg_buy_px': 0.87}, '180-240': {'n': 4, 'pnl': 3.0789, 'wr': 1.0, 'avg_buy_px': 0.8505}}
+  by_px: {'0.80+': {'n': 11, 'pnl': 6.995, 'wr': 1.0, 'avg_buy_px': 0.8565}}
+caveats:
+  - No live orders; paper only.
+  - Cannot verify human latency / click timing / partial fills without L2 + own order log.
+  - Cannot know maker vs taker fee per fill (activity has no fee field); session PnL is pre-explicit-fee.
+  - Cannot reconstruct ask depth at click; --fetch uses mid ± 0.005 as ask/bid proxy.
+  - One 3h session is high-variance; rules not statistically validated.
+  - Dual-side skip is mechanical (both outcomes bought); no intent log for hedges.
+  - Does not read .env; does not restart DAXUE/undervalued.
+still needs for multi-day:
+  - N-day dumped activity JSON (manual_activity_YYYYMMDD_*.json) for true fill-tape multi-day replay.
+  - Or retained CLOB prices-history for each btc-updown-5m-{epoch} token + Gamma settle labels.
+  - Optional denser UV HB logs covering the day range (open/spot) as settle cross-check.
+  - Optional L2 snapshots if you want ask-at-click fidelity beyond mid±half-spread.
+================================================
+

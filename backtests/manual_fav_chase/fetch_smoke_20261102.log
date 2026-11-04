@@ -1,0 +1,16 @@
+[fetch] UV HB logs found: 4; slugs_with_hb=340
+[fetch] capping windows 288 → 24 (pass --max-markets 0 for full range)
+[fetch] windows=24 range=2026-11-02 00:00:00 Asia/Shanghai → 2026-11-03 00:00:00 Asia/Shanghai
+  … scanned 20/24 ok=20
+Wrote /Users/nick/poly-test/backtests/manual_fav_chase/fetch_summary.json
+Wrote /Users/nick/poly-test/backtests/manual_fav_chase/fetch_summary_20261102_20261102.json
+Wrote /Users/nick/poly-test/backtests/manual_fav_chase/fetch_trades.csv
+Wrote /Users/nick/poly-test/backtests/manual_fav_chase/fetch_trades_20261102_20261102.csv
+
+======== manual_fav_chase multi-day fetch ========
+range: 2026-11-02 00:00:00 Asia/Shanghai → 2026-11-03 00:00:00 Asia/Shanghai
+markets_ok=24 fail/skip=0
+R1: n=23 WR=0.6957 pnl=$-18.6339 by_rem={'180-240': {'n': 19, 'pnl': -9.9348, 'wr': 0.7368, 'avg_buy_px': 0.7932}, '120-180': {'n': 4, 'pnl': -8.6991, 'wr': 0.5, 'avg_buy_px': 0.7925}}
+R2: n=18 WR=0.9444 pnl=$5.2363 by_rem={'180-240': {'n': 8, 'pnl': -1.3294, 'wr': 0.875, 'avg_buy_px': 0.8825}, '60-120': {'n': 6, 'pnl': 4.0323, 'wr': 1.0, 'avg_buy_px': 0.8733}, '120-180': {'n': 4, 'pnl': 2.5334, 'wr': 1.0, 'avg_buy_px': 0.8775}}
+================================================
+

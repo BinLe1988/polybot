@@ -1,0 +1,42 @@
+[filters] trend_n=3 enabled=True sr1000=True (--trend6 is alias; lookback is 3)
+[range] inclusive SH days 2026-10-31→2026-11-02 epochs=[1793376000,1793635200) = 2026-10-31 00:00:00 Asia/Shanghai → 2026-11-03 00:00:00 Asia/Shanghai
+[klines] fetching Binance 5m 2026-10-30 23:35:00 Asia/Shanghai → 2026-11-03 00:00:00 Asia/Shanghai
+[klines] n_bars=871
+[fetch] windows=864 range=2026-10-31 00:00:00 Asia/Shanghai → 2026-11-03 00:00:00 Asia/Shanghai trend3_prevalence up=103 down=94 other=667 pct=22.80%
+[fetch] parallel workers=12
+  … scanned 40/864 ok=40
+  … scanned 80/864 ok=80
+  … scanned 120/864 ok=120
+  … scanned 160/864 ok=160
+  … scanned 200/864 ok=200
+  … scanned 240/864 ok=240
+  … scanned 280/864 ok=280
+  … scanned 320/864 ok=320
+  … scanned 360/864 ok=360
+  … scanned 400/864 ok=400
+  … scanned 480/864 ok=455
+  … scanned 520/864 ok=495
+  … scanned 560/864 ok=535
+  … scanned 600/864 ok=575
+  … scanned 640/864 ok=615
+  … scanned 680/864 ok=655
+  … scanned 720/864 ok=695
+  … scanned 760/864 ok=735
+  … scanned 800/864 ok=775
+  … scanned 840/864 ok=815
+Wrote /Users/nick/poly-test/backtests/manual_fav_chase/trend_sr_fetch_summary_20261031_20261102.json
+Wrote /Users/nick/poly-test/backtests/manual_fav_chase/trend_sr_fetch_trades_20261031_20261102.csv
+
+======== fav_chase trend+SR (fetch_B_mid_sim) ========
+range: 2026-10-31 00:00:00 Asia/Shanghai → 2026-11-03 00:00:00 Asia/Shanghai
+filters: trend6=True sr1000=True klines=871
+R1 BASELINE: n=695 WR=0.7827 pnl=$-28.4542
+R1 FILTERED: n=88 WR=0.8409 pnl=$24.284
+R1 baseline_triggers=695 would_block_trend6=608 would_block_sr_false=1
+R2 BASELINE: n=636 WR=0.8443 pnl=$-12.6573
+R2 FILTERED: n=78 WR=0.8974 pnl=$9.1943
+R2 baseline_triggers=636 would_block_trend6=556 would_block_sr_false=2
+trend3 def: Relative to current 5m market window start ws: take Binance BTCUSDT 5m closes for bar opens [ws-1200, ws-900, ws-600, ws-300] (4 closes). Co ...
+sr1000 def: Round levels every 1000 USD. Probe last 4 completed 5m bars. Near-level band ±150.0. Pierce beyond level by ≥20.0. FALSE ...
+================================================
+

@@ -1,0 +1,206 @@
+{
+  "mode": "session_replay_trend_sr",
+  "path_label": "A_fill_tape",
+  "session_id": "days3_20261031_1102",
+  "start": "2026-10-31 00:00:00 Asia/Shanghai",
+  "end": "2026-11-03 00:00:00 Asia/Shanghai",
+  "generated_at_asia_shanghai": "2026-11-03T12:13:59.311881+08:00",
+  "size_usd_paper": 5.0,
+  "filters": {
+    "trend_n": 3,
+    "trend6": true,
+    "trend3": true,
+    "sr1000": true,
+    "klines_n": 871,
+    "klines_source": "data-api.binance.vision BTCUSDT 5m"
+  },
+  "tape": {
+    "n_fills": 140,
+    "n_roundtrips": 139,
+    "n_closed": 54,
+    "closed_pnl": 32.9057
+  },
+  "rule_results": {
+    "R1": {
+      "baseline": {
+        "label": "R1",
+        "n_candidates_incl_skips": 13,
+        "n_scored": 3,
+        "n_skipped": 10,
+        "n_open_stub": 0,
+        "wr": 1.0,
+        "pnl_actual_sum": 0.8349,
+        "pnl_size5_sum": 4.1242,
+        "avg_buy_px": 0.7667,
+        "avg_rem": 187.0,
+        "by_rem": {
+          "120-180": {
+            "n": 2,
+            "pnl": 0.4449,
+            "wr": 1.0,
+            "avg_buy_px": 0.8
+          },
+          "180-240": {
+            "n": 1,
+            "pnl": 0.39,
+            "wr": 1.0,
+            "avg_buy_px": 0.7
+          }
+        },
+        "by_px": {
+          "0.80+": {
+            "n": 1,
+            "pnl": 0.1924,
+            "wr": 1.0,
+            "avg_buy_px": 0.82
+          },
+          "0.60-0.80": {
+            "n": 2,
+            "pnl": 0.6425,
+            "wr": 1.0,
+            "avg_buy_px": 0.74
+          }
+        },
+        "tags": {
+          "WIN_099": 3
+        }
+      },
+      "filtered": {
+        "label": "R1",
+        "n_candidates_incl_skips": 13,
+        "n_scored": 0,
+        "n_skipped": 13,
+        "n_open_stub": 0,
+        "wr": null,
+        "pnl_actual_sum": 0,
+        "pnl_size5_sum": 0,
+        "avg_buy_px": null,
+        "avg_rem": null,
+        "by_rem": {},
+        "by_px": {},
+        "tags": {}
+      },
+      "filter_stats": {
+        "n_baseline_scored": 3,
+        "n_filtered_scored": 0,
+        "n_blocked_by_filters": 13,
+        "n_blocked_trend6": 13,
+        "n_blocked_sr_false": 0,
+        "blocked_slugs": [
+          "btc-updown-5m-1793457600:Down",
+          "btc-updown-5m-1793457600:Down",
+          "btc-updown-5m-1793459100:Up",
+          "btc-updown-5m-1793459100:Up",
+          "btc-updown-5m-1793459400:Up",
+          "btc-updown-5m-1793459400:Up",
+          "btc-updown-5m-1793459700:Up",
+          "btc-updown-5m-1793459700:Up",
+          "btc-updown-5m-1793546100:Down",
+          "btc-updown-5m-1793546100:Down",
+          "btc-updown-5m-1793631600:Up",
+          "btc-updown-5m-1793631600:Up",
+          "btc-updown-5m-1793633700:Down"
+        ]
+      }
+    },
+    "R2": {
+      "baseline": {
+        "label": "R2",
+        "n_candidates_incl_skips": 7,
+        "n_scored": 3,
+        "n_skipped": 4,
+        "n_open_stub": 0,
+        "wr": 1.0,
+        "pnl_actual_sum": 1.0161,
+        "pnl_size5_sum": 2.0498,
+        "avg_buy_px": 0.8633,
+        "avg_rem": 161.7,
+        "by_rem": {
+          "120-180": {
+            "n": 1,
+            "pnl": 0.1924,
+            "wr": 1.0,
+            "avg_buy_px": 0.82
+          },
+          ">240": {
+            "n": 1,
+            "pnl": 0.1843,
+            "wr": 1.0,
+            "avg_buy_px": 0.9
+          },
+          "60-120": {
+            "n": 1,
+            "pnl": 0.6394,
+            "wr": 1.0,
+            "avg_buy_px": 0.87
+          }
+        },
+        "by_px": {
+          "0.80+": {
+            "n": 3,
+            "pnl": 1.0161,
+            "wr": 1.0,
+            "avg_buy_px": 0.8633
+          }
+        },
+        "tags": {
+          "WIN_099": 3
+        }
+      },
+      "filtered": {
+        "label": "R2",
+        "n_candidates_incl_skips": 7,
+        "n_scored": 0,
+        "n_skipped": 7,
+        "n_open_stub": 0,
+        "wr": null,
+        "pnl_actual_sum": 0,
+        "pnl_size5_sum": 0,
+        "avg_buy_px": null,
+        "avg_rem": null,
+        "by_rem": {},
+        "by_px": {},
+        "tags": {}
+      },
+      "filter_stats": {
+        "n_baseline_scored": 3,
+        "n_filtered_scored": 0,
+        "n_blocked_by_filters": 7,
+        "n_blocked_trend6": 7,
+        "n_blocked_sr_false": 0,
+        "blocked_slugs": [
+          "btc-updown-5m-1793457600:Down",
+          "btc-updown-5m-1793457600:Down",
+          "btc-updown-5m-1793458500:Down",
+          "btc-updown-5m-1793458500:Down",
+          "btc-updown-5m-1793459100:Up",
+          "btc-updown-5m-1793544900:Up",
+          "btc-updown-5m-1793544900:Up"
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "trend3": "Relative to current 5m market window start ws: take Binance BTCUSDT 5m closes for bar opens [ws-1200, ws-900, ws-600, ws-300] (4 closes). Continuous UP = each of the 3 consecutive close-to-close steps has close[i] >= close[i-1]. Continuous DOWN symmetric (<=). Flat (all equal) = no trend. Entry: Up-chase only if UP; Down-chase only if DOWN; otherwise block. CLI: --trend3 (preferred) or --trend6 (alias enabling same filter); TREND_N=3.",
+    "trend6": "ALIAS of trend3: lookback is 3 completed 5m windows (NOT 6). See definitions.trend3.",
+    "sr1000": "Round levels every 1000 USD. Probe last 4 completed 5m bars. Near-level band ±150.0. Pierce beyond level by ≥20.0. FALSE break: pierce then reclaim (close back through level) within 2 bars (or close+later reclaim). TRUE break: close beyond level and hold (subsequent 1 bar(s) stay beyond; no later reclaim in probe). Gate: SKIP only false breaks on the chase side; ALLOW true breaks and non-near-level (none).",
+    "base_rules": {
+      "R1": "BUY fill/ask>=0.65, rem in (120,240]; SELL bid>=0.99 else hold-settle; $5; one side/window",
+      "R2": "BUY fill>=0.80; TP 0.99; skip rem<60; $5; one side/window"
+    }
+  },
+  "caveats": [
+    "Filters use Binance BTCUSDT 5m OHLC, not Polymarket window open/settle prints — small timestamp/basis mismatch possible.",
+    "S/R true/false heuristics are rule-based (pierce/reclaim/hold); not ML; borderline probes labeled 'none' and allowed.",
+    "Path A fill-tape is funder wallet activity (may include bot fills), not pure manual fav-chase labels.",
+    "Path B mid±0.005 sim cannot prove click timing / depth; sparse CLOB history may miss or skew triggers.",
+    "Both filters must pass when --trend6 and --sr1000 are set; compare baseline vs filtered in the same run.",
+    "No live orders; paper only.",
+    "Cannot verify human latency / click timing / partial fills without L2 + own order log.",
+    "Cannot know maker vs taker fee per fill (activity has no fee field); session PnL is pre-explicit-fee.",
+    "Cannot reconstruct ask depth at click; --fetch uses mid ± 0.005 as ask/bid proxy.",
+    "One 3h session is high-variance; rules not statistically validated.",
+    "Dual-side skip is mechanical (both outcomes bought); no intent log for hedges.",
+    "Does not read .env; does not restart DAXUE/undervalued."
+  ]
+}

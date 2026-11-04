@@ -1,0 +1,1343 @@
+#!/usr/bin/env python3
+"""
+btc5m_daxue_live.py — Polymarket BTC 5m 「大数投资」DAXUE live strategy
+
+Translate 齐东平 A-share 大数投资 principles into BTC 5m binary:
+  1. Low cost / 低估值: BUY only when ask ∈ [ASK_MIN, ASK_MAX] (default 0.22–0.40)
+  2. Side from spot vs window open (UP if spot>open+tol, DOWN if spot<open-tol)
+  3. 大数 diversify: ≤1 new entry per 5m window; max concurrent cost ≤ floor(2/3*bankroll)
+  4. Hold to settlement — no mid-window sell
+  5. 永续/逆向 light: never chase ask > ASK_MAX
+  6. Post-window BUY banned (left<=0 or now>=market_end)
+  7. Hard BUY cap: place_order market buy with maxPrice=decision_ask+slip (FOK)
+
+Does NOT restart / depend on GUIDED_LIVE lag+SR filters.
+Orders via node place_order.mjs (POLY_1271 OWNER path). Never prints private keys.
+
+Reviews / PnL: use btc5m_poly_settle.py (Gamma actual outcome via outcomePrices /
+umaResolutionStatus). Do NOT use next-window-open as W/L. Five-trade review CLI:
+daxue_five_trade_review.py. Edge snapshot: daxue_edge_snapshot.py.
+
+Capital protection (保本金→验边→日收益), env-tunable:
+  DAY_LOSS_STOP (default $7), CONSEC_LOSS_PAUSE (3), PAUSE_MIN (30),
+  BIG_WIN_LOCK ($6) + LOCK_GAINS (1): lock day after one settled leg PnL > BIG_WIN_LOCK.
+  DAY_PROFIT_LOCK ($15): lock when (day_pnl_settled − profit_lock_baseline) ≥ $15; unlock resets baseline.
+  DAILY_TARGET_SOFT legacy unused. State: logs/daxue_day_state_YYYYMMDD.json.
+  prune_settled frees deploy AND Gamma-updates day_pnl / loss streak when resolved.
+
+Risk filters (env-tunable):
+  OVERNIGHT_PAUSE Asia/Shanghai [OVERNIGHT_PAUSE_START_H, OVERNIGHT_PAUSE_END_H)
+    default 00:00–08:00 — no NEW entries; settle/logging/heartbeats continue.
+  ADVERSE_SLIP / stale-cheap-fill: before FOK, re-check book estimate vs decision_ask;
+    SKIP if (decision_ask − est_fill) ≥ ADVERSE_SLIP (0.10) OR
+    (decision_ask ≥ STALE_ASK_MIN 0.35 and est_fill ≤ STALE_FILL_MAX 0.25).
+  WEAK TREND FILTER (not the main signal; side still from spot vs window open ±tol):
+    Allow ENTRY only when 1h and 4h BTC spot change directions agree with each other
+    AND with intended side (UP=uptrend, DOWN=downtrend). If 1h vs 4h disagree → SKIP;
+    if they agree but oppose side → SKIP. Missing 1h/4h prices → fail-open (ALLOW).
+    Log [DAXUE][SKIP] trend_filter ... when blocking. Env: TREND_FILTER / DAXUE_TREND_FILTER.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import math
+import os
+import subprocess
+import time
+from dataclasses import dataclass, asdict
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+from zoneinfo import ZoneInfo
+
+import aiohttp
+import websockets
+
+from daxue_day_risk import DayRiskState
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+LOGS_DIR = SCRIPT_DIR / "logs"
+PID_FILE = LOGS_DIR / "daxue_live.pid"
+OPEN_POS_FILE = LOGS_DIR / "daxue_open_positions.json"
+PLACE_ORDER_JS = SCRIPT_DIR / "place_order.mjs"
+
+
+def _truthy(v: str) -> bool:
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def load_dotenv(path: Optional[Path] = None) -> dict:
+    p = path or (SCRIPT_DIR / ".env")
+    out = {}
+    if not p.is_file():
+        return out
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip(), v.strip().strip('"').strip("'")
+        out[k] = v
+        if k not in os.environ:
+            os.environ[k] = v
+    return out
+
+
+_DOTENV = load_dotenv()
+
+# Prefer Clash 7897 (user); do not overwrite if already set by launcher.
+for _k, _v in (
+    ("HTTPS_PROXY", "http://127.0.0.1:7897"),
+    ("HTTP_PROXY", "http://127.0.0.1:7897"),
+    ("ALL_PROXY", "http://127.0.0.1:7897"),
+):
+    os.environ.setdefault(_k, _v)
+os.environ.setdefault("NODE_OPTIONS", "--use-env-proxy")
+
+
+def _fenv(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return float(default)
+
+
+CONFIG = {
+    "STRATEGY": "DAXUE",
+    "POLYMARKET_LIVE": _truthy(os.getenv("POLYMARKET_LIVE", "0")),
+    "POSITION_USD": min(
+        max(0.01, _fenv("POLYMARKET_MAX_ORDER_USD", _fenv("POSITION_USD", 2.0))),
+        _fenv("POLYMARKET_MAX_ORDER_USD", 2.0),
+    ),
+    "ASK_MIN": _fenv("DAXUE_ASK_MIN", 0.22),
+    # tightened for small bankroll trial (override with DAXUE_ASK_MAX)
+    "ASK_MAX": _fenv("DAXUE_ASK_MAX", 0.40),
+    # BUY hard cap = min(ASK_MAX, decision_ask) + slip; passed to place_order --max-price
+    "BUY_SLIP": _fenv("DAXUE_BUY_SLIP", 0.02),
+    # fill_px > decision_ask + this → BAD_FILL (still logs; not counted as edge)
+    "BAD_FILL_OVER": _fenv("DAXUE_BAD_FILL_OVER", 0.03),
+    "OPEN_TOL_USD": _fenv("DAXUE_OPEN_TOL_USD", 5.0),
+    "BANKROLL_USD": _fenv("DAXUE_BANKROLL_USD", 20.0),
+    # max concurrent unsettled cost = floor(2/3 * bankroll)
+    "MAX_DEPLOY_USD": float(
+        os.getenv("DAXUE_MAX_DEPLOY_USD")
+        or math.floor((2.0 / 3.0) * _fenv("DAXUE_BANKROLL_USD", 20.0))
+    ),
+    "MAX_RUN_SEC": _fenv("MAX_RUN_SEC", 3600.0),
+    "POLL_SEC": _fenv("DAXUE_POLL_SEC", 3.0),
+    "HEARTBEAT_SEC": _fenv("DAXUE_HEARTBEAT_SEC", 30.0),
+    "PLACE_ORDER_JS": str(PLACE_ORDER_JS),
+    "DRY_RUN": _truthy(os.getenv("DAXUE_DRY_RUN", "0")),
+    # Capital protection / goal layering (保本金 → 验边 → 日收益)
+    "DAY_LOSS_STOP": _fenv(
+        "DAY_LOSS_STOP", _fenv("DAXUE_DAY_LOSS_STOP", 7.0)
+    ),
+    "CONSEC_LOSS_PAUSE": int(
+        float(
+            os.getenv(
+                "CONSEC_LOSS_PAUSE",
+                os.getenv("DAXUE_CONSEC_LOSS_PAUSE", "3"),
+            )
+        )
+    ),
+    "PAUSE_MIN": int(
+        float(os.getenv("PAUSE_MIN", os.getenv("DAXUE_PAUSE_MIN", "30")))
+    ),
+    # Single-window big-win lock (replaces day-cumulative soft target)
+    "BIG_WIN_LOCK": _fenv(
+        "BIG_WIN_LOCK",
+        _fenv("LOCK_WIN_PNL", _fenv("DAXUE_BIG_WIN_LOCK", 6.0)),
+    ),
+    "LOCK_GAINS": _truthy(
+        os.getenv("LOCK_GAINS", os.getenv("DAXUE_LOCK_GAINS", "1"))
+    ),
+    # Cumulative settled day-profit lock (many small wins)
+    "DAY_PROFIT_LOCK": _fenv(
+        "DAY_PROFIT_LOCK", _fenv("DAXUE_DAY_PROFIT_LOCK", 15.0)
+    ),
+    # Legacy soft day-cumulative lock — unused (compat / banner only)
+    "DAILY_TARGET_SOFT": _fenv(
+        "DAILY_TARGET_SOFT", _fenv("DAXUE_DAILY_TARGET_SOFT", 0.80)
+    ),
+    # Overnight pause Asia/Shanghai: no NEW entries in [start_h, end_h)
+    "OVERNIGHT_PAUSE": _truthy(
+        os.getenv("OVERNIGHT_PAUSE", os.getenv("DAXUE_OVERNIGHT_PAUSE", "1"))
+    ),
+    "OVERNIGHT_PAUSE_START_H": int(
+        float(
+            os.getenv(
+                "OVERNIGHT_PAUSE_START_H",
+                os.getenv("DAXUE_OVERNIGHT_PAUSE_START_H", "0"),
+            )
+        )
+    ),
+    "OVERNIGHT_PAUSE_END_H": int(
+        float(
+            os.getenv(
+                "OVERNIGHT_PAUSE_END_H",
+                os.getenv("DAXUE_OVERNIGHT_PAUSE_END_H", "8"),
+            )
+        )
+    ),
+    # FOK adverse-slip / stale-cheap-fill hygiene (skip, do not raise ASK_MAX/size)
+    "ADVERSE_SLIP": _fenv(
+        "ADVERSE_SLIP", _fenv("DAXUE_ADVERSE_SLIP", 0.10)
+    ),
+    "STALE_ASK_MIN": _fenv(
+        "STALE_ASK_MIN", _fenv("DAXUE_STALE_ASK_MIN", 0.35)
+    ),
+    "STALE_FILL_MAX": _fenv(
+        "STALE_FILL_MAX", _fenv("DAXUE_STALE_FILL_MAX", 0.25)
+    ),
+    # Weak BTC trend filter (1h/4h agree with each other AND intended side)
+    "TREND_FILTER": _truthy(
+        os.getenv("TREND_FILTER", os.getenv("DAXUE_TREND_FILTER", "1"))
+    ),
+    "TREND_1H_SEC": _fenv(
+        "TREND_1H_SEC", _fenv("DAXUE_TREND_1H_SEC", 3600.0)
+    ),
+    "TREND_4H_SEC": _fenv(
+        "TREND_4H_SEC", _fenv("DAXUE_TREND_4H_SEC", 14400.0)
+    ),
+}
+
+TZ_SH = ZoneInfo("Asia/Shanghai")
+
+
+@dataclass
+class PricePoint:
+    ts: float
+    price: float
+
+
+@dataclass
+class Market:
+    token_up: str
+    token_down: str
+    open_price: float
+    end_ts: float
+    question: str = ""
+    slug: str = ""
+    start_ts: float = 0.0
+
+
+@dataclass
+class OpenPos:
+    slug: str
+    side: str
+    ask: float
+    cost_usd: float
+    market_end: float
+    open_price: float
+    spot_at_entry: float
+    ts: float
+    order_id: str = ""
+    live_filled: bool = False
+    fill_px: float = 0.0
+    decision_ask: float = 0.0
+    bad_fill: bool = False
+
+
+def setup_logging() -> logging.Logger:
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = LOGS_DIR / f"daxue_live_{stamp}.log"
+    logger = logging.getLogger("daxue")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s", "%H:%M:%S")
+    fh = logging.FileHandler(log_path, encoding="utf-8")
+    fh.setFormatter(fmt)
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    logger.addHandler(fh)
+    logger.addHandler(sh)
+    logger.info(f"[DAXUE] log_file={log_path}")
+    return logger
+
+
+log = setup_logging()
+
+
+def write_pid() -> None:
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+
+
+def load_open_positions() -> list:
+    if not OPEN_POS_FILE.is_file():
+        return []
+    try:
+        data = json.loads(OPEN_POS_FILE.read_text(encoding="utf-8"))
+        raw = data.get("positions") if isinstance(data, dict) else data
+        out = []
+        for r in raw or []:
+            out.append(
+                OpenPos(
+                    slug=str(r.get("slug") or ""),
+                    side=str(r.get("side") or "").upper(),
+                    ask=float(r.get("ask") or 0),
+                    cost_usd=float(r.get("cost_usd") or 0),
+                    market_end=float(r.get("market_end") or 0),
+                    open_price=float(r.get("open_price") or 0),
+                    spot_at_entry=float(r.get("spot_at_entry") or 0),
+                    ts=float(r.get("ts") or 0),
+                    order_id=str(r.get("order_id") or ""),
+                    live_filled=bool(r.get("live_filled", True)),
+                    fill_px=float(r.get("fill_px") or 0),
+                    decision_ask=float(r.get("decision_ask") or r.get("ask") or 0),
+                    bad_fill=bool(r.get("bad_fill", False)),
+                )
+            )
+        return out
+    except Exception as e:
+        log.warning(f"[DAXUE] load open positions failed: {e}")
+        return []
+
+
+def save_open_positions(positions: list) -> None:
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "updated": time.time(),
+        "strategy": "DAXUE",
+        "open_count": len(positions),
+        "open_cost": round(sum(p.cost_usd for p in positions), 4),
+        "positions": [asdict(p) for p in positions],
+    }
+    OPEN_POS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+class BinanceFeed:
+    """BTCUSDT spot via Binance WS + sparse hist for weak 1h/4h trend filter.
+
+    Live ticks drive spot/window-open (main signal). Trend lookbacks use
+    `price_ago` over seeded 1m klines + downsampled WS points. Missing hist
+    ⇒ trend filter fail-open (see DaxueBot.trend_filter_ok).
+    """
+
+    def __init__(self):
+        self.prices: list = []  # recent dense WS ticks
+        self.hist: list = []  # sparse PricePoint for ~4h+ lookback
+        self.latest = 0.0
+        self._task = None
+        self._last_hist_sample_ts = 0.0
+        self._last_kline_seed_ts = 0.0
+
+    async def start(self):
+        self._task = asyncio.create_task(self._run())
+
+    def _retain_sec(self) -> float:
+        return max(900.0, float(CONFIG.get("TREND_4H_SEC", 14400.0)) + 600.0)
+
+    def _prune(self, now: float) -> None:
+        retain = self._retain_sec()
+        # Dense WS: keep only ~15m for spot/open (memory)
+        self.prices = [p for p in self.prices if p.ts > now - 900]
+        self.hist = [p for p in self.hist if p.ts > now - retain]
+
+    def _note_hist(self, ts: float, price: float, force: bool = False) -> None:
+        """Downsample into hist (~30s) so 1h/4h price_ago stays available live."""
+        if price <= 0:
+            return
+        if (
+            not force
+            and self._last_hist_sample_ts
+            and (ts - self._last_hist_sample_ts) < 30.0
+        ):
+            return
+        self.hist.append(PricePoint(ts, price))
+        self._last_hist_sample_ts = ts
+
+    def price_ago(self, seconds: float) -> Optional[float]:
+        """Closest price at or before (now - seconds). Prefer hist, fall back to WS."""
+        if seconds <= 0:
+            return self.latest if self.latest > 0 else None
+        target = time.time() - float(seconds)
+        best: Optional[PricePoint] = None
+        for series in (self.hist, self.prices):
+            for p in reversed(series):
+                if p.ts <= target:
+                    if best is None or abs(p.ts - target) < abs(best.ts - target):
+                        best = p
+                    break
+        # Accept if within 20% of lookback or 10 min slack (whichever larger)
+        if best is None:
+            return None
+        slack = max(600.0, float(seconds) * 0.20)
+        if abs(best.ts - target) > slack:
+            return None
+        return best.price
+
+    def trend_dir(self, lookback_sec: float) -> Optional[str]:
+        """Sign of change over lookback: UP / DOWN. None if unavailable or flat."""
+        if self.latest <= 0:
+            return None
+        ago = self.price_ago(lookback_sec)
+        if ago is None or ago <= 0:
+            return None
+        delta = self.latest - ago
+        if abs(delta) < 1e-9:
+            return None
+        return "UP" if delta > 0 else "DOWN"
+
+    async def seed_hist_klines(self) -> int:
+        """Seed hist from Binance public 1m klines (~4h+) via proxy-aware curl."""
+        need = int(math.ceil(self._retain_sec() / 60.0)) + 5
+        limit = max(60, min(1000, need))
+        url = (
+            "https://data-api.binance.vision/api/v3/klines"
+            f"?symbol=BTCUSDT&interval=1m&limit={limit}"
+        )
+        proxy = os.environ.get("HTTPS_PROXY", "http://127.0.0.1:7897")
+
+        def _fetch():
+            cmd = [
+                "curl",
+                "-sS",
+                "--max-time",
+                "20",
+                "-x",
+                proxy,
+                url,
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stderr.strip() or f"curl exit {proc.returncode}")
+            return json.loads(proc.stdout)
+
+        try:
+            rows = await asyncio.to_thread(_fetch)
+        except Exception as e:
+            log.warning(f"[DAXUE] trend hist klines seed failed: {e}")
+            return 0
+        if not isinstance(rows, list) or not rows:
+            log.warning("[DAXUE] trend hist klines seed empty")
+            return 0
+        added = 0
+        for row in rows:
+            try:
+                # [openTime, open, high, low, close, ...]
+                ts = float(row[0]) / 1000.0
+                close = float(row[4])
+            except Exception:
+                continue
+            if close <= 0:
+                continue
+            self.hist.append(PricePoint(ts, close))
+            added += 1
+            if self.latest <= 0:
+                self.latest = close
+        self.hist.sort(key=lambda p: p.ts)
+        # de-dupe by second
+        dedup = []
+        last_ts = -1.0
+        for p in self.hist:
+            if int(p.ts) == int(last_ts):
+                dedup[-1] = p
+            else:
+                dedup.append(p)
+                last_ts = p.ts
+        self.hist = dedup
+        self._prune(time.time())
+        self._last_kline_seed_ts = time.time()
+        if self.hist:
+            self._last_hist_sample_ts = self.hist[-1].ts
+        log.info(
+            f"[DAXUE] trend hist seeded n={len(self.hist)} "
+            f"span_min={(self.hist[-1].ts - self.hist[0].ts) / 60.0:.0f} "
+            f"last={self.hist[-1].price:.2f}"
+        )
+        return len(self.hist)
+
+    async def _run(self):
+        url = "wss://data-stream.binance.vision/ws/btcusdt@trade"
+        while True:
+            try:
+                async with websockets.connect(url, ping_interval=20) as ws:
+                    log.info("[DAXUE] Binance WS connected")
+                    async for raw in ws:
+                        data = json.loads(raw)
+                        price = float(data["p"])
+                        now = time.time()
+                        self.latest = price
+                        self.prices.append(PricePoint(now, price))
+                        self._note_hist(now, price)
+                        self._prune(now)
+            except Exception as e:
+                log.error(f"[DAXUE] Binance error: {e}")
+                await asyncio.sleep(2)
+
+
+async def create_session():
+    return aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(ssl=False),
+        timeout=aiohttp.ClientTimeout(total=12),
+        trust_env=True,
+    )
+
+
+def _as_list(v):
+    if v is None:
+        return []
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except Exception:
+            return []
+    return list(v) if isinstance(v, (list, tuple)) else []
+
+
+async def find_btc5m(session) -> Optional[Market]:
+    """Discover current BTC 5m Up/Down via gamma slug btc-updown-5m-<windowStart>."""
+    now = time.time()
+    base = int(now // 300) * 300
+    for start in (base - 300, base, base + 300, base + 600):
+        slug = f"btc-updown-5m-{start}"
+        try:
+            async with session.get(
+                f"https://gamma-api.polymarket.com/markets/slug/{slug}"
+            ) as r:
+                if r.status != 200:
+                    continue
+                m = await r.json()
+        except Exception as e:
+            log.error(f"[DAXUE] Gamma slug {slug}: {e}")
+            continue
+        if not isinstance(m, dict) or m.get("closed") is True:
+            continue
+        end_str = m.get("endDate") or m.get("end_date")
+        if not end_str:
+            continue
+        try:
+            end_ts = datetime.fromisoformat(end_str.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+        if not (15 < end_ts - now < 320):
+            continue
+        tokens = _as_list(m.get("clobTokenIds"))
+        outcomes = _as_list(m.get("outcomes"))
+        if len(tokens) < 2:
+            continue
+        token_up = token_down = None
+        for i, o in enumerate(outcomes):
+            ol = str(o).lower()
+            if ol == "up" or "up" in ol or "yes" in ol:
+                token_up = str(tokens[i])
+            elif ol == "down" or "down" in ol or "no" in ol:
+                token_down = str(tokens[i])
+        if not token_up or not token_down:
+            token_up, token_down = str(tokens[0]), str(tokens[1])
+        q = (m.get("question") or slug).lower()
+        return Market(
+            token_up=token_up,
+            token_down=token_down,
+            open_price=0.0,
+            end_ts=end_ts,
+            question=q,
+            slug=slug,
+            start_ts=float(start),
+        )
+    return None
+
+
+async def get_book(session, token_id: str) -> dict:
+    try:
+        async with session.get(
+            "https://clob.polymarket.com/book", params={"token_id": token_id}
+        ) as r:
+            return await r.json()
+    except Exception:
+        return {}
+
+
+def best_ask(book: dict) -> float:
+    asks = book.get("asks") or []
+    if not asks:
+        return 1.0
+    return min(float(a["price"]) for a in asks)
+
+
+def place_order_sync(
+    slug: str,
+    outcome: str,
+    side: str,
+    amount: float,
+    price: Optional[float] = None,
+    dry: bool = False,
+    max_price: Optional[float] = None,
+    decision_ask: Optional[float] = None,
+) -> dict:
+    """Call node place_order.mjs; never logs secrets.
+
+    For BUY, pass max_price (hard cap) and decision_ask (logged). price is kept
+    for SELL share derivation / backward compat; BUY prefers --max-price.
+    """
+    js = CONFIG.get("PLACE_ORDER_JS") or str(PLACE_ORDER_JS)
+    amt = min(float(amount), float(CONFIG["POSITION_USD"]))
+    if amt <= 0:
+        return {"ok": False, "error": "amount_zero"}
+    cmd = [
+        "node",
+        js,
+        "--slug",
+        str(slug),
+        "--outcome",
+        str(outcome).lower(),
+        "--side",
+        str(side).upper(),
+        "--amount",
+        f"{max(amt, 0.01):.2f}",
+    ]
+    if decision_ask is not None and decision_ask > 0:
+        cmd.extend(["--decision-ask", f"{float(decision_ask):.4f}"])
+    if max_price is not None and max_price > 0:
+        cmd.extend(["--max-price", f"{float(max_price):.4f}"])
+    elif price is not None and price > 0:
+        # BUY without explicit max_price: --price becomes BUY cap in place_order.mjs
+        cmd.extend(["--price", f"{float(price):.4f}"])
+    if dry:
+        cmd.append("--dry")
+    env = os.environ.copy()
+    env.setdefault("HTTPS_PROXY", "http://127.0.0.1:7897")
+    env.setdefault("HTTP_PROXY", "http://127.0.0.1:7897")
+    env.setdefault("ALL_PROXY", "http://127.0.0.1:7897")
+    env.setdefault("NODE_OPTIONS", "--use-env-proxy")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(SCRIPT_DIR),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"subprocess: {e}"}
+    raw = (proc.stdout or "").strip() or (proc.stderr or "").strip()
+    parsed = None
+    try:
+        if raw:
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                i = raw.rfind("{")
+                if i >= 0:
+                    parsed = json.loads(raw[i:])
+    except Exception:
+        parsed = None
+    ok = (
+        proc.returncode == 0
+        and isinstance(parsed, dict)
+        and parsed.get("ok", True) is not False
+    )
+    if isinstance(parsed, dict):
+        parsed = dict(parsed)
+        parsed["ok"] = bool(ok)
+        parsed["_returncode"] = proc.returncode
+        return parsed
+    return {
+        "ok": False,
+        "error": "bad_response",
+        "_returncode": proc.returncode,
+        "_stdout_tail": raw[-300:] if raw else "",
+    }
+
+
+async def place_order(
+    slug: str,
+    outcome: str,
+    side: str,
+    amount: float,
+    price: Optional[float] = None,
+    dry: bool = False,
+    max_price: Optional[float] = None,
+    decision_ask: Optional[float] = None,
+) -> dict:
+    return await asyncio.to_thread(
+        place_order_sync,
+        slug,
+        outcome,
+        side,
+        amount,
+        price,
+        dry,
+        max_price,
+        decision_ask,
+    )
+
+
+def top_ask_size(book: dict) -> float:
+    asks = book.get("asks") or []
+    if not asks:
+        return 0.0
+    best = min(asks, key=lambda a: float(a.get("price") or 1))
+    try:
+        return float(best.get("size") or best.get("amount") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def estimate_buy_fill(book: dict, cost_usd: float) -> Optional[float]:
+    """Walk asks ascending; return VWAP fill estimate for spending cost_usd, or None."""
+    asks = book.get("asks") or []
+    if not asks or cost_usd <= 0:
+        return None
+    levels = []
+    for a in asks:
+        try:
+            px = float(a.get("price"))
+            sz = float(a.get("size") or a.get("amount") or 0)
+        except (TypeError, ValueError):
+            continue
+        if px <= 0 or sz <= 0:
+            continue
+        levels.append((px, sz))
+    if not levels:
+        return None
+    levels.sort(key=lambda x: x[0])
+    remain = float(cost_usd)
+    spent = 0.0
+    shares = 0.0
+    for px, sz in levels:
+        level_notional = px * sz
+        if level_notional <= remain + 1e-12:
+            spent += level_notional
+            shares += sz
+            remain -= level_notional
+        else:
+            take = remain / px
+            spent += remain
+            shares += take
+            remain = 0.0
+            break
+    if shares <= 0 or remain > 1e-6:
+        # not enough depth — fall back to best ask if present
+        return levels[0][0] if levels else None
+    return spent / shares
+
+
+def extract_fill_px(resp: dict) -> Optional[float]:
+    if not isinstance(resp, dict):
+        return None
+    for k in ("fill_px", "fillPx", "avg_price", "averagePrice"):
+        try:
+            v = float(resp.get(k))
+            if v > 0:
+                return v
+        except (TypeError, ValueError):
+            pass
+    r = resp.get("response")
+    if isinstance(r, dict):
+        try:
+            taking = float(r.get("takingAmount") or r.get("taking_amount") or 0)
+            making = float(r.get("makingAmount") or r.get("making_amount") or 0)
+            if taking > 0 and making > 0:
+                return making / taking  # BUY: collateral / shares
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+async def check_geoblock(session) -> dict:
+    """Prefer curl via proxy — aiohttp can choke on polymarket.com CSP header size."""
+    def _curl():
+        try:
+            proc = subprocess.run(
+                [
+                    "curl", "-sS", "-m", "10",
+                    "-x", os.environ.get("HTTPS_PROXY", "http://127.0.0.1:7897"),
+                    "https://polymarket.com/api/geoblock",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            raw = (proc.stdout or "").strip()
+            if raw:
+                return json.loads(raw)
+            return {"error": f"curl_empty rc={proc.returncode} err={(proc.stderr or '')[:120]}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    try:
+        return await asyncio.to_thread(_curl)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+class DaxueBot:
+    def __init__(self):
+        self.bn = BinanceFeed()
+        self.open_positions: list = load_open_positions()
+        self.open_cache: dict = {}  # market_end -> btc open
+        self._entered_slugs: set = set()
+        self._start_ts = time.time()
+        self._last_hb = 0.0
+        self._last_settle_retry = 0.0
+        self.day_risk = DayRiskState(LOGS_DIR, CONFIG)
+        # restore entered slugs so restart won't double-enter same window
+        for p in self.open_positions:
+            if p.slug:
+                self._entered_slugs.add(p.slug)
+
+    def open_cost(self) -> float:
+        return sum(p.cost_usd for p in self.open_positions)
+
+    def prune_settled(self, now: float) -> None:
+        """Free deploy budget after market_end (+grace). Hold-to-settlement: no sell.
+
+        Also queue / Gamma-settle freed legs into DayRiskState (day_pnl / streak).
+        """
+        grace = 30.0
+        kept = []
+        freed = []
+        for p in self.open_positions:
+            if p.market_end > 0 and now >= p.market_end + grace:
+                log.info(
+                    f"[DAXUE][SETTLE] free slot {p.side} slug={p.slug} "
+                    f"cost=${p.cost_usd:.2f} market_end={int(p.market_end)}"
+                )
+                freed.append(p)
+            else:
+                kept.append(p)
+        if freed:
+            self.open_positions = kept
+            save_open_positions(self.open_positions)
+            for p in freed:
+                if not p.live_filled and CONFIG["DRY_RUN"]:
+                    continue
+                self.day_risk.queue_pending(p)
+                self.day_risk.try_settle_one(
+                    p.slug,
+                    {
+                        "side": p.side,
+                        "cost_usd": p.cost_usd,
+                        "fill_px": p.fill_px,
+                        "decision_ask": p.decision_ask or p.ask,
+                    },
+                )
+            self.day_risk.check_day_loss(self.open_positions)
+
+    def pick_side(self, spot: float, open_price: float) -> Optional[str]:
+        tol = float(CONFIG["OPEN_TOL_USD"])
+        if open_price <= 0 or spot <= 0:
+            return None
+        delta = spot - open_price
+        if abs(delta) < tol:
+            return None
+        return "UP" if delta > 0 else "DOWN"
+
+    def trend_filter_ok(self, side: str) -> tuple:
+        """Weak filter only: allow when 1h & 4h dirs agree with each other and side.
+
+        Returns (ok: bool, detail: str). Fail-open if filter off or either lookback
+        unavailable. Does NOT choose side — pick_side (spot vs open) remains primary.
+        """
+        if not CONFIG.get("TREND_FILTER", True):
+            return True, "trend_filter=OFF"
+        sec1 = float(CONFIG.get("TREND_1H_SEC", 3600.0))
+        sec4 = float(CONFIG.get("TREND_4H_SEC", 14400.0))
+        d1 = self.bn.trend_dir(sec1)
+        d4 = self.bn.trend_dir(sec4)
+        px1 = self.bn.price_ago(sec1)
+        px4 = self.bn.price_ago(sec4)
+        spot = self.bn.latest
+        detail = (
+            f"side={side} trend_1h={d1 or 'NA'} trend_4h={d4 or 'NA'} "
+            f"spot={spot:.2f} px_1h={px1 if px1 is not None else '-'} "
+            f"px_4h={px4 if px4 is not None else '-'}"
+        )
+        if d1 is None or d4 is None:
+            # fail-open: do not block when hist incomplete
+            return True, f"fail_open_missing {detail}"
+        if d1 != d4:
+            return False, f"1h_4h_disagree {detail}"
+        if d1 != side:
+            return False, f"trend_opposes_side {detail}"
+        return True, f"agree {detail}"
+
+    async def maybe_enter(self, session, market: Market, left: float, now: float) -> None:
+        if not CONFIG["POLYMARKET_LIVE"] and not CONFIG["DRY_RUN"]:
+            log.warning("[DAXUE][SKIP] POLYMARKET_LIVE!=1 and DAXUE_DRY_RUN!=1")
+            return
+
+        # Overnight pause Asia/Shanghai [start_h, end_h): no NEW entries
+        if CONFIG.get("OVERNIGHT_PAUSE", True):
+            sh_hour = datetime.now(TZ_SH).hour
+            start_h = int(CONFIG["OVERNIGHT_PAUSE_START_H"])
+            end_h = int(CONFIG["OVERNIGHT_PAUSE_END_H"])
+            in_pause = (
+                (start_h <= sh_hour < end_h)
+                if start_h < end_h
+                else (sh_hour >= start_h or sh_hour < end_h)
+            )
+            if in_pause:
+                if int(now) % 30 < int(CONFIG["POLL_SEC"]) + 1:
+                    log.info(
+                        f"[DAXUE][SKIP] overnight-pause hour={sh_hour:02d} "
+                        f"window={start_h:02d}-{end_h:02d} Asia/Shanghai "
+                        f"left={left:.0f}s slug={market.slug}"
+                    )
+                return
+
+        block = self.day_risk.entry_block_reason(self.open_positions, now)
+        if block:
+            if int(now) % 30 < int(CONFIG["POLL_SEC"]) + 1:
+                log.info(
+                    f"[DAXUE][SKIP] {block} day_pnl_settled="
+                    f"${self.day_risk.day_pnl_settled:+.2f} "
+                    f"for_stop=${self.day_risk.day_pnl_for_stop(self.open_positions):+.2f} "
+                    f"streak_L={self.day_risk.consec_losses} "
+                    f"left={left:.0f}s slug={market.slug}"
+                )
+            return
+
+        # Post-window BUY banned
+        if left <= 0 or now >= market.end_ts:
+            log.info(
+                f"[DAXUE][SKIP] post-window left={left:.0f}s now>={int(market.end_ts)}"
+            )
+            return
+
+        if market.slug in self._entered_slugs:
+            return  # at most ONE new entry per 5m window
+
+        # already have a live position on this slug
+        if any(p.slug == market.slug for p in self.open_positions):
+            self._entered_slugs.add(market.slug)
+            return
+
+        spot = self.bn.latest
+        open_px = market.open_price
+        if spot <= 0 or open_px <= 0:
+            return
+
+        side = self.pick_side(spot, open_px)
+        if side is None:
+            # throttle noise skip logs via heartbeat mostly; occasional log
+            if int(now) % 15 == 0:
+                log.info(
+                    f"[DAXUE][SKIP] no-edge |spot-open|={abs(spot-open_px):.2f}<"
+                    f"{CONFIG['OPEN_TOL_USD']:.0f} spot={spot:.2f} open={open_px:.2f} "
+                    f"left={left:.0f}s"
+                )
+            return
+
+        # Weak trend filter (after side chosen; never replaces spot-vs-open signal)
+        ok_trend, trend_detail = self.trend_filter_ok(side)
+        if not ok_trend:
+            log.info(
+                f"[DAXUE][SKIP] trend_filter {trend_detail} "
+                f"left={left:.0f}s slug={market.slug}"
+            )
+            return
+
+        cost = float(CONFIG["POSITION_USD"])
+        max_deploy = float(CONFIG["MAX_DEPLOY_USD"])
+        cur = self.open_cost()
+        if cur + cost > max_deploy + 1e-9:
+            log.info(
+                f"[DAXUE][SKIP] max-deploy open_cost=${cur:.2f}+${cost:.2f}>"
+                f"${max_deploy:.0f} side={side} left={left:.0f}s"
+            )
+            return
+
+        token = market.token_up if side == "UP" else market.token_down
+        book = await get_book(session, token)
+        ask = best_ask(book)
+        ask_min = float(CONFIG["ASK_MIN"])
+        ask_max = float(CONFIG["ASK_MAX"])
+
+        if ask > ask_max:
+            log.info(
+                f"[DAXUE][SKIP] chase-ban ask={ask:.3f}>{ask_max:.2f} side={side} "
+                f"spot={spot:.2f} open={open_px:.2f} left={left:.0f}s slug={market.slug}"
+            )
+            return
+        if ask < ask_min:
+            log.info(
+                f"[DAXUE][SKIP] ask-below-floor ask={ask:.3f}<{ask_min:.2f} side={side} "
+                f"left={left:.0f}s"
+            )
+            return
+
+        # Near ASK_MAX with thin top-of-book: skip (simple depth guard)
+        slip = float(CONFIG["BUY_SLIP"])
+        if ask >= ask_max - 0.02:
+            depth = top_ask_size(book)
+            need = cost / max(ask, 1e-6)
+            if depth > 0 and depth < need * 1.25:
+                log.info(
+                    f"[DAXUE][SKIP] thin-near-cap ask={ask:.3f}~ask_max={ask_max:.2f} "
+                    f"depth={depth:.2f}<need*{1.25:.2f}={need*1.25:.2f} side={side} "
+                    f"left={left:.0f}s slug={market.slug}"
+                )
+                return
+
+        decision_ask = float(ask)
+        buy_cap = min(ask_max, decision_ask) + slip
+        # never allow cap above ASK_MAX + slip
+        buy_cap = min(buy_cap, ask_max + slip)
+
+        # FOK adverse-slip / stale-cheap-fill: re-fetch book & estimate fill vs decision_ask
+        # Prefer SKIP (allow re-quote next poll) over blind FOK into a bad/stale print.
+        try:
+            book2 = await get_book(session, token)
+        except Exception:
+            book2 = book
+        est_fill = estimate_buy_fill(book2, cost)
+        fresh_ask = best_ask(book2)
+        if est_fill is None or est_fill <= 0:
+            est_fill = float(fresh_ask) if fresh_ask and fresh_ask < 1.0 else decision_ask
+        # If book moved cheaper, use the fresher implied print for hygiene
+        implied = min(float(est_fill), float(fresh_ask) if fresh_ask < 1.0 else float(est_fill))
+        adv_lim = float(CONFIG["ADVERSE_SLIP"])
+        stale_ask_min = float(CONFIG["STALE_ASK_MIN"])
+        stale_fill_max = float(CONFIG["STALE_FILL_MAX"])
+        slip_vs_decision = float(decision_ask) - float(implied)
+        if slip_vs_decision >= adv_lim - 1e-12:
+            log.info(
+                f"[DAXUE][SKIP] adverse-slip decision_ask={decision_ask:.3f} "
+                f"est_fill={implied:.3f} slip={slip_vs_decision:.3f}>={adv_lim:.2f} "
+                f"side={side} left={left:.0f}s slug={market.slug}"
+            )
+            return
+        if decision_ask >= stale_ask_min - 1e-12 and implied <= stale_fill_max + 1e-12:
+            log.info(
+                f"[DAXUE][SKIP] stale-cheap-fill decision_ask={decision_ask:.3f}>="
+                f"{stale_ask_min:.2f} est_fill={implied:.3f}<={stale_fill_max:.2f} "
+                f"side={side} left={left:.0f}s slug={market.slug}"
+            )
+            return
+
+        # Mark window claimed before order to avoid double-fire on slow FOK
+        self._entered_slugs.add(market.slug)
+
+        log.info(
+            f"[DAXUE][LIVE][ENTRY] {side} ask={ask:.3f} band=[{ask_min:.2f},{ask_max:.2f}] "
+            f"decision_ask={decision_ask:.3f} max_price={buy_cap:.3f} slip={slip:.2f} "
+            f"spot={spot:.2f} open={open_px:.2f} delta={spot-open_px:+.2f} "
+            f"cost=${cost:.2f} open_cost=${cur:.2f}/${max_deploy:.0f} "
+            f"left={left:.0f}s slug={market.slug} price_cap=market_buy_maxPrice_FOK"
+        )
+
+        dry = bool(CONFIG["DRY_RUN"]) or not bool(CONFIG["POLYMARKET_LIVE"])
+        resp = await place_order(
+            market.slug,
+            side.lower(),
+            "BUY",
+            cost,
+            price=decision_ask,
+            dry=dry,
+            max_price=buy_cap,
+            decision_ask=decision_ask,
+        )
+        ok = bool(resp.get("ok"))
+        order_id = ""
+        if isinstance(resp.get("response"), dict):
+            order_id = str(
+                resp["response"].get("orderID")
+                or resp["response"].get("orderId")
+                or resp["response"].get("id")
+                or ""
+            )
+        fill_px = extract_fill_px(resp)
+        bad_over = float(CONFIG["BAD_FILL_OVER"])
+        bad_fill = bool(resp.get("badFill"))
+        if fill_px is not None:
+            if fill_px > decision_ask + bad_over or fill_px > ask_max + bad_over:
+                bad_fill = True
+        if ok and not bad_fill:
+            pos = OpenPos(
+                slug=market.slug,
+                side=side,
+                ask=ask,
+                cost_usd=cost,
+                market_end=market.end_ts,
+                open_price=open_px,
+                spot_at_entry=spot,
+                ts=now,
+                order_id=order_id,
+                live_filled=not dry,
+                fill_px=float(fill_px or 0),
+                decision_ask=decision_ask,
+                bad_fill=False,
+            )
+            self.open_positions.append(pos)
+            save_open_positions(self.open_positions)
+            tag = "DRY" if dry else "FILL"
+            log.info(
+                f"[DAXUE][{tag}] {side} decision_ask={decision_ask:.3f} "
+                f"fill_px={fill_px if fill_px is not None else '-'} "
+                f"max_price={buy_cap:.3f} slug={market.slug} "
+                f"order_id={order_id or '-'} resp_ok=1 "
+                f"priceCapMode={resp.get('priceCapMode','')} "
+                f"funder={resp.get('funder','')} sig={resp.get('signatureTypeName','')}"
+            )
+        elif bad_fill:
+            # Capital may be spent; still track deploy budget but flag loudly.
+            pos = OpenPos(
+                slug=market.slug,
+                side=side,
+                ask=ask,
+                cost_usd=cost,
+                market_end=market.end_ts,
+                open_price=open_px,
+                spot_at_entry=spot,
+                ts=now,
+                order_id=order_id,
+                live_filled=not dry,
+                fill_px=float(fill_px or 0),
+                decision_ask=decision_ask,
+                bad_fill=True,
+            )
+            self.open_positions.append(pos)
+            save_open_positions(self.open_positions)
+            log.error(
+                f"[DAXUE][BAD_FILL] {side} decision_ask={decision_ask:.3f} "
+                f"fill_px={fill_px if fill_px is not None else '-'} "
+                f"max_price={buy_cap:.3f} ask_max={ask_max:.2f} "
+                f"slug={market.slug} order_id={order_id or '-'} "
+                f"— NOT counted as valid edge trade"
+            )
+        else:
+            # allow retry later in same window on failed FOK / transient
+            self._entered_slugs.discard(market.slug)
+            err = resp.get("error") or resp.get("_stdout_tail") or str(resp)[:200]
+            log.warning(
+                f"[DAXUE][SKIP] order-fail {side} decision_ask={decision_ask:.3f} "
+                f"max_price={buy_cap:.3f} slug={market.slug} err={err}"
+            )
+
+    async def run(self):
+        write_pid()
+        await self.bn.start()
+        # Seed 1h/4h hist ASAP so weak trend filter can evaluate (fail-open until ready)
+        try:
+            await self.bn.seed_hist_klines()
+        except Exception as e:
+            log.warning(f"[DAXUE] trend hist seed error: {e}")
+        session = await create_session()
+        try:
+            geo = await check_geoblock(session)
+            blocked = geo.get("blocked")
+            if blocked is True:
+                log.warning(f"[DAXUE][WARN] geoblock blocked=true geo={geo}")
+            else:
+                log.info(f"[DAXUE] geoblock blocked={blocked} geo={geo}")
+
+            # Dry self-check of place_order client (no live order)
+            dry_ok = False
+            try:
+                m0 = await find_btc5m(session)
+                if m0 and m0.slug:
+                    chk = await place_order(
+                        m0.slug,
+                        "up",
+                        "BUY",
+                        CONFIG["POSITION_USD"],
+                        dry=True,
+                        max_price=float(CONFIG["ASK_MAX"]) + float(CONFIG["BUY_SLIP"]),
+                        decision_ask=float(CONFIG["ASK_MAX"]),
+                    )
+                    dry_ok = bool(chk.get("ok"))
+                    log.info(
+                        f"[DAXUE][SELFCHECK] place_order --dry ok={dry_ok} "
+                        f"slug={m0.slug} sig={chk.get('signatureTypeName')} "
+                        f"funder={chk.get('funder')} walletType={chk.get('walletType')} "
+                        f"priceCapMode={chk.get('priceCapMode')} "
+                        f"maxPrice={chk.get('maxPrice')}"
+                    )
+                else:
+                    help_chk = await asyncio.to_thread(
+                        place_order_sync,
+                        "btc-updown-5m-0",
+                        "up",
+                        "BUY",
+                        CONFIG["POSITION_USD"],
+                        None,
+                        True,
+                    )
+                    # help path not used; just note missing market
+                    log.warning(
+                        f"[DAXUE][SELFCHECK] no live market yet for dry slug check "
+                        f"(help-path unused) detail={help_chk.get('error')}"
+                    )
+            except Exception as e:
+                log.warning(f"[DAXUE][SELFCHECK] failed: {e}")
+
+            max_run = float(CONFIG["MAX_RUN_SEC"] or 0)
+            log.info(
+                f"Started | mode=DAXUE_LIVE | strategy=大数投资/DAXUE | "
+                f"POLYMARKET_LIVE={CONFIG['POLYMARKET_LIVE']} | "
+                f"POSITION_USD={CONFIG['POSITION_USD']} | "
+                f"ask_band=[{CONFIG['ASK_MIN']:.2f},{CONFIG['ASK_MAX']:.2f}] | "
+                f"ask_max={CONFIG['ASK_MAX']:.2f} | "
+                f"buy_slip={CONFIG['BUY_SLIP']:.2f} | "
+                f"buy_cap=decision_ask+slip (maxPrice FOK) | "
+                f"bad_fill_over={CONFIG['BAD_FILL_OVER']:.2f} | "
+                f"open_tol=${CONFIG['OPEN_TOL_USD']:.0f} | "
+                f"bankroll=${CONFIG['BANKROLL_USD']:.0f} | "
+                f"max_deploy=${CONFIG['MAX_DEPLOY_USD']:.0f} | "
+                f"max_legs≈{int(CONFIG['MAX_DEPLOY_USD'] // CONFIG['POSITION_USD'])} | "
+                f"hold_to_settle=1 | one_entry_per_window=1 | "
+                f"MAX_RUN_SEC={int(max_run) if max_run else 0} | "
+                f"DRY_RUN={CONFIG['DRY_RUN']} | "
+                f"selfcheck_dry_ok={dry_ok} | "
+                f"open_restored={len(self.open_positions)} "
+                f"cost=${self.open_cost():.2f} | "
+                f"DAY_LOSS_STOP=${CONFIG['DAY_LOSS_STOP']:.2f} | "
+                f"CONSEC_LOSS_PAUSE={CONFIG['CONSEC_LOSS_PAUSE']} | "
+                f"PAUSE_MIN={CONFIG['PAUSE_MIN']} | "
+                f"BIG_WIN_LOCK=${CONFIG['BIG_WIN_LOCK']:.2f} | "
+                f"LOCK_GAINS={int(bool(CONFIG['LOCK_GAINS']))} | "
+                f"DAY_PROFIT_LOCK=${CONFIG['DAY_PROFIT_LOCK']:.2f} | "
+                f"DAILY_TARGET_SOFT=unused | "
+                f"overnight_pause="
+                f"{'ON' if CONFIG.get('OVERNIGHT_PAUSE', True) else 'OFF'}"
+                f"={int(CONFIG['OVERNIGHT_PAUSE_START_H']):02d}-"
+                f"{int(CONFIG['OVERNIGHT_PAUSE_END_H']):02d} Asia/Shanghai | "
+                f"adverse_slip>={CONFIG['ADVERSE_SLIP']:.2f} | "
+                f"stale_cheap="
+                f"ask>={CONFIG['STALE_ASK_MIN']:.2f}&fill<={CONFIG['STALE_FILL_MAX']:.2f} | "
+                f"trend_filter="
+                f"{'ON' if CONFIG.get('TREND_FILTER', True) else 'OFF'}"
+                f"(1h&4h agree w/ side; fail-open if missing) | "
+                f"day={self.day_risk.day} "
+                f"day_pnl_settled=${self.day_risk.day_pnl_settled:+.2f} "
+                f"streak_L={self.day_risk.consec_losses} "
+                f"stopped={self.day_risk.day_loss_stopped or self.day_risk.lock_gains_stopped or self.day_risk.day_profit_stopped} | "
+                f"proxy={os.environ.get('HTTPS_PROXY', '')}"
+            )
+            log.info(
+                "[DAXUE][LIVE] ON: orders via node place_order.mjs "
+                "price_cap=market_buy_maxPrice_FOK | "
+                "tags [DAXUE][LIVE][ENTRY]|[SKIP]|[FILL]|[BAD_FILL]|[SETTLE]|"
+                "[DAY_LOSS_STOP]|[CONSEC_LOSS_PAUSE]|[LOCK_GAINS]|[DAY_PROFIT_LOCK]|"
+                "[overnight-pause]|[adverse-slip]|[stale-cheap-fill]|[trend_filter] | "
+                "GUIDED_LIVE frozen — this process does not use lag+SR"
+            )
+
+            while True:
+                now = time.time()
+                if max_run > 0 and (now - self._start_ts) >= max_run:
+                    log.info(f"[DAXUE] MAX_RUN_SEC={int(max_run)} reached — stopping cleanly")
+                    break
+
+                self.prune_settled(now)
+                # Retry Gamma for pending freed legs ~every 60s
+                if now - self._last_settle_retry >= 60.0:
+                    self._last_settle_retry = now
+                    try:
+                        self.day_risk.retry_pending(max_n=8)
+                        self.day_risk.check_day_loss(self.open_positions)
+                    except Exception as e:
+                        log.warning(f"[DAXUE] settle_retry: {e}")
+
+                if self.bn.latest <= 0:
+                    await asyncio.sleep(0.5)
+                    continue
+
+                market = await find_btc5m(session)
+                if not market:
+                    if now - self._last_hb >= CONFIG["HEARTBEAT_SEC"]:
+                        self._last_hb = now
+                        log.info(
+                            f"[DAXUE] heartbeat: no market | btc={self.bn.latest:.0f} "
+                            f"open_pos={len(self.open_positions)} cost=${self.open_cost():.2f}"
+                        )
+                    await asyncio.sleep(CONFIG["POLL_SEC"])
+                    continue
+
+                left = market.end_ts - now
+                # Cache window open once (first spot seen for this end_ts)
+                if market.end_ts not in self.open_cache:
+                    self.open_cache[market.end_ts] = self.bn.latest
+                    market.open_price = self.bn.latest
+                    log.info(
+                        f"[DAXUE] window open cached end={int(market.end_ts)} "
+                        f"open={market.open_price:.2f} left={left:.0f}s slug={market.slug}"
+                    )
+                else:
+                    market.open_price = self.open_cache[market.end_ts]
+
+                try:
+                    await self.maybe_enter(session, market, left, now)
+                except Exception as e:
+                    log.error(f"[DAXUE] maybe_enter error: {e}")
+
+                # Refresh sparse hist from klines ~every 10m (keeps 4h lookback warm)
+                if (
+                    CONFIG.get("TREND_FILTER", True)
+                    and (now - float(self.bn._last_kline_seed_ts or 0)) >= 600.0
+                ):
+                    try:
+                        await self.bn.seed_hist_klines()
+                    except Exception as e:
+                        log.warning(f"[DAXUE] trend hist refresh: {e}")
+
+                if now - self._last_hb >= CONFIG["HEARTBEAT_SEC"]:
+                    self._last_hb = now
+                    side_hint = self.pick_side(self.bn.latest, market.open_price) or "-"
+                    dr = self.day_risk
+                    stop_tag = (
+                        "DAY_LOSS_STOP"
+                        if dr.day_loss_stopped
+                        else (
+                            "LOCK_GAINS"
+                            if dr.lock_gains_stopped
+                            else (
+                                "DAY_PROFIT_LOCK"
+                                if dr.day_profit_stopped
+                                else (
+                                    "CONSEC_PAUSE"
+                                    if dr.pause_until > now
+                                    else "ok"
+                                )
+                            )
+                        )
+                    )
+                    t1 = self.bn.trend_dir(float(CONFIG.get("TREND_1H_SEC", 3600.0)))
+                    t4 = self.bn.trend_dir(float(CONFIG.get("TREND_4H_SEC", 14400.0)))
+                    log.info(
+                        f"[DAXUE] heartbeat: left={left:.0f}s side_hint={side_hint} "
+                        f"trend_1h={t1 or '-'} trend_4h={t4 or '-'} "
+                        f"btc={self.bn.latest:.0f} open={market.open_price:.0f} "
+                        f"delta={self.bn.latest - market.open_price:+.1f} "
+                        f"open_pos={len(self.open_positions)} "
+                        f"cost=${self.open_cost():.2f}/${CONFIG['MAX_DEPLOY_USD']:.0f} "
+                        f"day_pnl=${dr.day_pnl_settled:+.2f} "
+                        f"for_stop=${dr.day_pnl_for_stop(self.open_positions):+.2f} "
+                        f"streak_L={dr.consec_losses} risk={stop_tag} "
+                        f"slug={market.slug}"
+                    )
+
+                await asyncio.sleep(CONFIG["POLL_SEC"])
+        finally:
+            await session.close()
+            save_open_positions(self.open_positions)
+            log.info(
+                f"[DAXUE] stopped | open_pos={len(self.open_positions)} "
+                f"cost=${self.open_cost():.2f}"
+            )
+
+
+def main():
+    bot = DaxueBot()
+    try:
+        asyncio.run(bot.run())
+    except KeyboardInterrupt:
+        log.info("[DAXUE] KeyboardInterrupt — exit")
+    finally:
+        try:
+            if PID_FILE.is_file() and PID_FILE.read_text().strip() == str(os.getpid()):
+                PID_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    main()

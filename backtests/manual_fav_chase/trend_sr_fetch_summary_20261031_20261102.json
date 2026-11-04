@@ -1,0 +1,262 @@
+{
+  "mode": "fetch_multiday_trend_sr",
+  "path_label": "B_mid_sim_fetch",
+  "start": "2026-10-31 00:00:00 Asia/Shanghai",
+  "end": "2026-11-03 00:00:00 Asia/Shanghai",
+  "start_sh_inclusive": "2026-10-31",
+  "end_sh_inclusive": "2026-11-02",
+  "range_note": "end epoch is exclusive; --end-sh is inclusive Shanghai calendar day",
+  "markets_ok": 839,
+  "markets_fail_or_skip": 25,
+  "filters": {
+    "trend_n": 3,
+    "trend6": true,
+    "trend3": true,
+    "sr1000": true,
+    "trend_windows_only": false,
+    "trend_prevalence": {
+      "up": 103,
+      "down": 94,
+      "other": 667,
+      "n_windows_in_range": 864,
+      "active_pct": 0.228
+    },
+    "trend6_def": "ALIAS: prior 3 completed 5m close-to-close monotonic; Up chase only if up; Down only if down",
+    "trend3_def": "prior 3 completed 5m close-to-close monotonic (need 4 closes); Up chase only if up; Down only if down",
+    "sr1000_def": "levels every 1000; near=150.0; pierce=20.0; false=pierce+reclaim within 2 bars; true=close beyond+hold 1; gate=skip false only",
+    "klines_n": 871,
+    "klines_source": "data-api.binance.vision BTCUSDT 5m"
+  },
+  "rules_baseline": {
+    "R1": {
+      "label": "R1",
+      "n_candidates_incl_skips": 695,
+      "n_scored": 695,
+      "n_skipped": 0,
+      "n_open_stub": 0,
+      "wr": 0.7827,
+      "pnl_actual_sum": -28.4542,
+      "pnl_size5_sum": -28.4542,
+      "avg_buy_px": 0.7776,
+      "avg_rem": 200.0,
+      "by_rem": {
+        "180-240": {
+          "n": 481,
+          "pnl": -47.6609,
+          "wr": 0.7672,
+          "avg_buy_px": 0.7705
+        },
+        "120-180": {
+          "n": 214,
+          "pnl": 19.2067,
+          "wr": 0.8178,
+          "avg_buy_px": 0.7937
+        }
+      },
+      "by_px": {
+        "0.60-0.80": {
+          "n": 410,
+          "pnl": 2.4219,
+          "wr": 0.7341,
+          "avg_buy_px": 0.7161
+        },
+        "0.80+": {
+          "n": 285,
+          "pnl": -30.8761,
+          "wr": 0.8526,
+          "avg_buy_px": 0.8661
+        }
+      },
+      "tags": {
+        "SETTLE_LOSS": 148,
+        "SETTLE_WIN": 165,
+        "WIN_099": 382
+      }
+    },
+    "R2": {
+      "label": "R2",
+      "n_candidates_incl_skips": 636,
+      "n_scored": 636,
+      "n_skipped": 0,
+      "n_open_stub": 0,
+      "wr": 0.8443,
+      "pnl_actual_sum": -12.6573,
+      "pnl_size5_sum": -12.6573,
+      "avg_buy_px": 0.8822,
+      "avg_rem": 158.6,
+      "by_rem": {
+        "60-120": {
+          "n": 200,
+          "pnl": 32.3451,
+          "wr": 0.81,
+          "avg_buy_px": 0.9097
+        },
+        "120-180": {
+          "n": 249,
+          "pnl": -20.5243,
+          "wr": 0.8715,
+          "avg_buy_px": 0.8788
+        },
+        "180-240": {
+          "n": 174,
+          "pnl": -18.8146,
+          "wr": 0.8506,
+          "avg_buy_px": 0.8593
+        },
+        ">240": {
+          "n": 13,
+          "pnl": -5.6636,
+          "wr": 0.7692,
+          "avg_buy_px": 0.8277
+        }
+      },
+      "by_px": {
+        "0.80+": {
+          "n": 636,
+          "pnl": -12.6573,
+          "wr": 0.8443,
+          "avg_buy_px": 0.8822
+        }
+      },
+      "tags": {
+        "SETTLE_LOSS": 68,
+        "SETTLE_WIN": 144,
+        "WIN_099": 424
+      }
+    }
+  },
+  "rules_filtered": {
+    "R1": {
+      "label": "R1",
+      "n_candidates_incl_skips": 88,
+      "n_scored": 88,
+      "n_skipped": 0,
+      "n_open_stub": 0,
+      "wr": 0.8409,
+      "pnl_actual_sum": 24.284,
+      "pnl_size5_sum": 24.284,
+      "avg_buy_px": 0.7919,
+      "avg_rem": 203.0,
+      "by_rem": {
+        "180-240": {
+          "n": 66,
+          "pnl": 0.1297,
+          "wr": 0.803,
+          "avg_buy_px": 0.7965
+        },
+        "120-180": {
+          "n": 22,
+          "pnl": 24.1543,
+          "wr": 0.9545,
+          "avg_buy_px": 0.7782
+        }
+      },
+      "by_px": {
+        "0.80+": {
+          "n": 42,
+          "pnl": -9.1449,
+          "wr": 0.8571,
+          "avg_buy_px": 0.8802
+        },
+        "0.60-0.80": {
+          "n": 46,
+          "pnl": 33.4289,
+          "wr": 0.8261,
+          "avg_buy_px": 0.7113
+        }
+      },
+      "tags": {
+        "SETTLE_LOSS": 14,
+        "SETTLE_WIN": 28,
+        "WIN_099": 46
+      }
+    },
+    "R2": {
+      "label": "R2",
+      "n_candidates_incl_skips": 78,
+      "n_scored": 78,
+      "n_skipped": 0,
+      "n_open_stub": 0,
+      "wr": 0.8974,
+      "pnl_actual_sum": 9.1943,
+      "pnl_size5_sum": 9.1943,
+      "avg_buy_px": 0.8762,
+      "avg_rem": 176.3,
+      "by_rem": {
+        "180-240": {
+          "n": 30,
+          "pnl": -12.882,
+          "wr": 0.8,
+          "avg_buy_px": 0.8613
+        },
+        "120-180": {
+          "n": 22,
+          "pnl": 13.1248,
+          "wr": 1.0,
+          "avg_buy_px": 0.8834
+        },
+        "60-120": {
+          "n": 20,
+          "pnl": 9.1525,
+          "wr": 0.95,
+          "avg_buy_px": 0.9075
+        },
+        ">240": {
+          "n": 6,
+          "pnl": -0.201,
+          "wr": 0.8333,
+          "avg_buy_px": 0.82
+        }
+      },
+      "by_px": {
+        "0.80+": {
+          "n": 78,
+          "pnl": 9.1943,
+          "wr": 0.8974,
+          "avg_buy_px": 0.8762
+        }
+      },
+      "tags": {
+        "SETTLE_LOSS": 7,
+        "SETTLE_WIN": 24,
+        "WIN_099": 47
+      }
+    }
+  },
+  "filter_block_stats_on_baseline_triggers": {
+    "R1": {
+      "trend6": 608,
+      "sr_false": 1,
+      "total_baseline": 695
+    },
+    "R2": {
+      "trend6": 556,
+      "sr_false": 2,
+      "total_baseline": 636
+    }
+  },
+  "definitions": {
+    "trend3": "Relative to current 5m market window start ws: take Binance BTCUSDT 5m closes for bar opens [ws-1200, ws-900, ws-600, ws-300] (4 closes). Continuous UP = each of the 3 consecutive close-to-close steps has close[i] >= close[i-1]. Continuous DOWN symmetric (<=). Flat (all equal) = no trend. Entry: Up-chase only if UP; Down-chase only if DOWN; otherwise block. CLI: --trend3 (preferred) or --trend6 (alias enabling same filter); TREND_N=3.",
+    "trend6": "ALIAS of trend3: lookback is 3 completed 5m windows (NOT 6). See definitions.trend3.",
+    "sr1000": "Round levels every 1000 USD. Probe last 4 completed 5m bars. Near-level band ±150.0. Pierce beyond level by ≥20.0. FALSE break: pierce then reclaim (close back through level) within 2 bars (or close+later reclaim). TRUE break: close beyond level and hold (subsequent 1 bar(s) stay beyond; no later reclaim in probe). Gate: SKIP only false breaks on the chase side; ALLOW true breaks and non-near-level (none).",
+    "base_rules": {
+      "R1": "BUY fill/ask>=0.65, rem in (120,240]; SELL bid>=0.99 else hold-settle; $5; one side/window",
+      "R2": "BUY fill>=0.80; TP 0.99; skip rem<60; $5; one side/window"
+    }
+  },
+  "caveats": [
+    "Filters use Binance BTCUSDT 5m OHLC, not Polymarket window open/settle prints — small timestamp/basis mismatch possible.",
+    "S/R true/false heuristics are rule-based (pierce/reclaim/hold); not ML; borderline probes labeled 'none' and allowed.",
+    "Path A fill-tape is funder wallet activity (may include bot fills), not pure manual fav-chase labels.",
+    "Path B mid±0.005 sim cannot prove click timing / depth; sparse CLOB history may miss or skew triggers.",
+    "Both filters must pass when --trend6 and --sr1000 are set; compare baseline vs filtered in the same run.",
+    "No live orders; paper only.",
+    "Cannot verify human latency / click timing / partial fills without L2 + own order log.",
+    "Cannot know maker vs taker fee per fill (activity has no fee field); session PnL is pre-explicit-fee.",
+    "Cannot reconstruct ask depth at click; --fetch uses mid ± 0.005 as ask/bid proxy.",
+    "One 3h session is high-variance; rules not statistically validated.",
+    "Dual-side skip is mechanical (both outcomes bought); no intent log for hedges.",
+    "Does not read .env; does not restart DAXUE/undervalued."
+  ],
+  "generated_at_asia_shanghai": "2026-11-03T12:19:40.598237+08:00"
+}

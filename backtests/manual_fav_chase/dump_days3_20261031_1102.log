@@ -1,0 +1,12 @@
+[dump] funder=0xD18b…49B5 session=days3_20261031_1102
+[dump] range_sh=2026-10-31→2026-11-02 epochs=[1793376000,1793635200)
+[dump] page=1 got=100 total=100 has_more=True
+[dump] page=2 got=51 total=151 has_more=False
+[dump] wrote /Users/nick/poly-test/logs/manual_activity_days3_20261031_1102.json
+[dump] wrote /Users/nick/poly-test/backtests/manual_fav_chase/manual_activity_days3_20261031_1102.json
+[dump] activity=151 trades=140
+[dump] trade_span=2026-10-31 01:29:19+08:00 → 2026-11-02 23:57:33+08:00
+
+Replay:
+  python3 backtests/manual_fav_chase_backtest.py --session days3_20261031_1102 --rule ALL
+
