@@ -802,6 +802,7 @@ class FavChaseBot:
                         fill_px=float(p.fill_px or 0),
                         decision_ask=float(p.decision_ask or p.ask or 0),
                         cost_usd=float(p.cost_usd),
+                        exit_px=float(sell_px),
                     )
                     self.day_risk.check_day_loss(self.open_positions)
                 except Exception as e:

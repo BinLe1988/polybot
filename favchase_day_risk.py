@@ -25,6 +25,13 @@ v1 limits:
     idempotent). Clears sticky day_loss / lock_gains / day_profit stops.
   - after manual_resume, DAY_LOSS_STOP only re-fires if (day_pnl_for_stop − baseline)
     ≤ −DAY_LOSS_STOP (further loss from unlock baseline; baseline is 0 after counter reset)
+  - PnL accounting (2026-11-04) is NET of estimated taker fees: rate from config
+    TAKER_FEE_RATE (default 0.07), fee = shares·rate·p·(1−p) on the entry fill,
+    plus the exit leg when a TP exit passes exit_px. Settled records carry
+    pnl (net), pnl_gross and fee_est; stops/locks consume the NET figures.
+  - day_*_all aggregates (day_pnl_gross_all / day_fees_all / day_pnl_net_all /
+    n_w_all / n_l_all) cover ALL legs settled today and are NEVER reset by
+    manual_unlock — only by day rollover. Segment counters above still reset.
 """
 
 from __future__ import annotations
@@ -41,6 +48,12 @@ from btc5m_poly_settle import evaluate_position
 
 TZ_SH = ZoneInfo("Asia/Shanghai")
 log = logging.getLogger("favchase")
+
+
+def taker_fee_usd(shares: float, price: float, rate: float) -> float:
+    """Polymarket taker fee: shares · rate · p · (1−p)."""
+    p = max(0.0, min(1.0, float(price)))
+    return float(shares) * float(rate) * p * (1.0 - p)
 
 
 def day_state_path(logs_dir: Path, day: Optional[str] = None) -> Path:
@@ -75,6 +88,13 @@ class DayRiskState:
         self.pending: dict = {}
         self.n_w = 0
         self.n_l = 0
+        # Full-day aggregates over ALL legs settled today (net basis).
+        # NEVER reset by manual_unlock; only day rollover clears them.
+        self.day_pnl_gross_all = 0.0
+        self.day_fees_all = 0.0
+        self.day_pnl_net_all = 0.0
+        self.n_w_all = 0
+        self.n_l_all = 0
         self.load()
 
     def path(self) -> Path:
@@ -104,11 +124,105 @@ class DayRiskState:
         self.pending = dict(raw.get("pending") or {})
         self.n_w = int(raw.get("n_w") or 0)
         self.n_l = int(raw.get("n_l") or 0)
+        self.day_pnl_gross_all = float(raw.get("day_pnl_gross_all") or 0)
+        self.day_fees_all = float(raw.get("day_fees_all") or 0)
+        self.day_pnl_net_all = float(raw.get("day_pnl_net_all") or 0)
+        self.n_w_all = int(raw.get("n_w_all") or 0)
+        self.n_l_all = int(raw.get("n_l_all") or 0)
+        if not raw.get("fee_model"):
+            self._normalize_legacy_fees()
         # Re-apply current rules (clears legacy soft-target-only locks;
         # keeps lock if any settled leg already exceeds BIG_WIN_LOCK;
         # sticky DAY_PROFIT_LOCK if (pnl − baseline) ≥ threshold).
         self.recompute_lock_gains(persist=True)
         self.recompute_day_profit_lock(persist=True)
+
+    def fee_rate(self) -> float:
+        v = self.config.get("TAKER_FEE_RATE")
+        try:
+            return 0.07 if v is None else float(v)
+        except (TypeError, ValueError):
+            return 0.07
+
+    def _estimate_fee(self, cost_usd: float, fill_px: float, exit_px: float = 0.0) -> float:
+        cost = float(cost_usd or 0)
+        fill = float(fill_px or 0)
+        if cost <= 0 or fill <= 0 or fill >= 1:
+            return 0.0
+        shares = cost / fill
+        fee = taker_fee_usd(shares, fill, self.fee_rate())
+        ex = float(exit_px or 0)
+        if 0 < ex < 1:
+            fee += taker_fee_usd(shares, ex, self.fee_rate())
+        return round(fee, 4)
+
+    def _normalize_legacy_fees(self) -> None:
+        """One-time migration for state files written before fee accounting.
+
+        Rewrites every settled record to pnl_gross / fee_est / pnl(net),
+        recomputes the never-reset full-day aggregates, and re-derives the
+        current segment counters (legs settled after manual_resume_ts) on the
+        net basis so segment and full-day calibers stay consistent. Runs once:
+        save() stamps fee_model afterwards. Legacy TP-exit legs get the entry
+        fee only (no exit price was recorded for them).
+        """
+        if not self.settled:
+            self.day_pnl_gross_all = 0.0
+            self.day_fees_all = 0.0
+            self.day_pnl_net_all = 0.0
+            self.n_w_all = 0
+            self.n_l_all = 0
+            return
+        before_seg = float(self.day_pnl_settled)
+        g_all = f_all = 0.0
+        w_all = l_all = 0
+        cutoff = float(self.manual_resume_ts or 0)
+        seg_pnl = 0.0
+        seg_w = seg_l = 0
+        seg_streak = 0
+        for slug, meta in self.settled.items():
+            if not isinstance(meta, dict):
+                continue
+            gross = float(meta.get("pnl_gross", meta.get("pnl") or 0) or 0)
+            if "fee_est" in meta:
+                fee = float(meta.get("fee_est") or 0)
+            else:
+                fee = self._estimate_fee(meta.get("cost_usd") or 0, meta.get("fill_px") or 0)
+            net = round(gross - fee, 4)
+            meta["pnl_gross"] = round(gross, 4)
+            meta["fee_est"] = round(fee, 4)
+            meta["pnl"] = net
+            g_all += gross
+            f_all += fee
+            res = str(meta.get("result") or "")
+            if res == "W":
+                w_all += 1
+            elif res == "L":
+                l_all += 1
+            ts = float(meta.get("ts") or 0)
+            if cutoff <= 0 or ts > cutoff:
+                seg_pnl += net
+                if res == "W":
+                    seg_w += 1
+                    seg_streak = 0
+                elif res == "L":
+                    seg_l += 1
+                    seg_streak += 1
+        self.day_pnl_gross_all = round(g_all, 4)
+        self.day_fees_all = round(f_all, 4)
+        self.day_pnl_net_all = round(g_all - f_all, 4)
+        self.n_w_all = w_all
+        self.n_l_all = l_all
+        self.day_pnl_settled = round(seg_pnl, 4)
+        self.n_w = seg_w
+        self.n_l = seg_l
+        self.consec_losses = seg_streak
+        log.warning(
+            f"[FAVCHASE][FEE_NORMALIZE] legacy day_state migrated to net-of-fee: "
+            f"segment day_pnl {before_seg:+.4f} -> {self.day_pnl_settled:+.4f}; "
+            f"full-day gross={self.day_pnl_gross_all:+.4f} fees={self.day_fees_all:.4f} "
+            f"net={self.day_pnl_net_all:+.4f} W/L(all)={w_all}/{l_all}"
+        )
 
     def save(self) -> None:
         self.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -127,6 +241,12 @@ class DayRiskState:
             "pause_until": self.pause_until,
             "n_w": self.n_w,
             "n_l": self.n_l,
+            "day_pnl_gross_all": round(self.day_pnl_gross_all, 4),
+            "day_fees_all": round(self.day_fees_all, 4),
+            "day_pnl_net_all": round(self.day_pnl_net_all, 4),
+            "n_w_all": self.n_w_all,
+            "n_l_all": self.n_l_all,
+            "fee_model": "taker_fee_v1",
             "settled": self.settled,
             "pending": self.pending,
             "knobs": {
@@ -137,6 +257,7 @@ class DayRiskState:
                 "LOCK_GAINS": self.config.get("LOCK_GAINS"),
                 "DAY_PROFIT_LOCK": self.config.get("DAY_PROFIT_LOCK"),
                 "DAILY_TARGET_SOFT": self.config.get("DAILY_TARGET_SOFT"),
+                "TAKER_FEE_RATE": self.fee_rate(),
             },
         }
         self.path().write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -163,6 +284,11 @@ class DayRiskState:
         self.pending = {}
         self.n_w = 0
         self.n_l = 0
+        self.day_pnl_gross_all = 0.0
+        self.day_fees_all = 0.0
+        self.day_pnl_net_all = 0.0
+        self.n_w_all = 0
+        self.n_l_all = 0
         self.load()
         self.save()
         log.info(f"[FAVCHASE] day_state rollover → {self.day}")
@@ -188,14 +314,19 @@ class DayRiskState:
         fill_px: float = 0.0,
         decision_ask: float = 0.0,
         cost_usd: float = 0.0,
+        exit_px: float = 0.0,
     ) -> None:
         if slug in self.settled:
             return
         pnl_v = float(pnl) if pnl is not None else 0.0
+        fee_v = self._estimate_fee(cost_usd, fill_px, exit_px)
+        net_v = round(pnl_v - fee_v, 4)
         self.settled[slug] = {
             "side": side,
             "result": result,
-            "pnl": round(pnl_v, 4),
+            "pnl": net_v,
+            "pnl_gross": round(pnl_v, 4),
+            "fee_est": fee_v,
             "fill_px": fill_px,
             "decision_ask": decision_ask,
             "cost_usd": cost_usd,
@@ -204,12 +335,14 @@ class DayRiskState:
         self.pending.pop(slug, None)
         if result == "W":
             self.n_w += 1
+            self.n_w_all += 1
             self.consec_losses = 0
-            self.day_pnl_settled = round(self.day_pnl_settled + pnl_v, 4)
+            self.day_pnl_settled = round(self.day_pnl_settled + net_v, 4)
         elif result == "L":
             self.n_l += 1
+            self.n_l_all += 1
             self.consec_losses += 1
-            self.day_pnl_settled = round(self.day_pnl_settled + pnl_v, 4)
+            self.day_pnl_settled = round(self.day_pnl_settled + net_v, 4)
             pause_n = int(self.config.get("CONSEC_LOSS_PAUSE") or 0)
             if pause_n > 0 and self.consec_losses >= pause_n:
                 mins = int(self.config.get("PAUSE_MIN") or 30)
@@ -226,14 +359,19 @@ class DayRiskState:
             self.settled.pop(slug, None)
             return
 
-        # Big-win lock: one settled leg PnL > BIG_WIN_LOCK (not day-cumulative soft).
+        # Full-day aggregates: every settled leg, never reset by manual_unlock.
+        self.day_pnl_gross_all = round(self.day_pnl_gross_all + pnl_v, 4)
+        self.day_fees_all = round(self.day_fees_all + fee_v, 4)
+        self.day_pnl_net_all = round(self.day_pnl_net_all + net_v, 4)
+
+        # Big-win lock: one settled leg NET PnL > BIG_WIN_LOCK (not day-cumulative soft).
         if self.config.get("LOCK_GAINS") and not self.lock_gains_stopped:
             thr = float(self.config.get("BIG_WIN_LOCK") or 0)
-            if thr > 0 and pnl_v > thr:
+            if thr > 0 and net_v > thr:
                 self.lock_gains_stopped = True
                 self.manual_resume = False
                 log.warning(
-                    f"[FAVCHASE][LOCK_GAINS] single-leg pnl=${pnl_v:+.2f}>"
+                    f"[FAVCHASE][LOCK_GAINS] single-leg pnl=${net_v:+.2f}>"
                     f"BIG_WIN_LOCK=${thr:.2f} slug={slug} "
                     f"day_pnl_settled=${self.day_pnl_settled:+.2f} — "
                     f"stop new ENTRYs for the day (open holds settle)"
@@ -295,9 +433,13 @@ class DayRiskState:
                 decision_ask=float(ask_f or 0),
                 cost_usd=cost,
             )
+            rec = self.settled.get(slug) or {}
             log.info(
                 f"[FAVCHASE][SETTLE] gamma {r.result} slug={slug} side={side} "
-                f"pnl={r.pnl_usd} winner={r.winner} day_pnl=${self.day_pnl_settled:+.2f} "
+                f"pnl_gross={r.pnl_usd} fee_est={rec.get('fee_est')} "
+                f"pnl_net={rec.get('pnl')} winner={r.winner} "
+                f"day_seg=${self.day_pnl_settled:+.2f} "
+                f"day_all_net=${self.day_pnl_net_all:+.2f} "
                 f"streak_L={self.consec_losses}"
             )
             return r.result
@@ -461,6 +603,10 @@ class DayRiskState:
             "n_w": int(self.n_w),
             "n_l": int(self.n_l),
             "profit_lock_baseline": float(self.profit_lock_baseline or 0),
+            "day_pnl_net_all": float(self.day_pnl_net_all),
+            "day_fees_all": float(self.day_fees_all),
+            "n_w_all": int(self.n_w_all),
+            "n_l_all": int(self.n_l_all),
         }
         now = time.time()
         self.day_loss_stopped = False
@@ -490,6 +636,10 @@ class DayRiskState:
             "n_w": int(self.n_w),
             "n_l": int(self.n_l),
             "profit_lock_baseline": float(self.profit_lock_baseline or 0),
+            "day_pnl_net_all": float(self.day_pnl_net_all),
+            "day_fees_all": float(self.day_fees_all),
+            "n_w_all": int(self.n_w_all),
+            "n_l_all": int(self.n_l_all),
             "pending_n": len(self.pending),
             "settled_n": len(self.settled),
             "entry_block": self.entry_block_reason([], now),
